@@ -52,14 +52,9 @@ def carregar_dados():
         st.session_state['cache_jogadores'] = df
         return df
     except Exception as e:
-        if "429" in str(e):
-            st.error("🚨 O Google Sheets limitou as requisições (Erro 429). Aguarde 1 minuto.")
-            st.stop()
-        else:
-            if st.button("Tentar limpar cache e recarregar"):
-                st.cache_data.clear()
-                st.rerun()
-            st.stop()
+        st.error(f"⚠️ ERRO DETALHADO: {e}")
+        st.code(str(e)) # Mostra o erro técnico
+        st.stop()
 
 # --- FUNÇÕES MATEMÁTICAS E LÓGICA ---
 def calcular_novo_elo(rating_vencedor, rating_perdedor):
@@ -424,4 +419,5 @@ if 'fila_espera' in st.session_state and st.session_state['fila_espera']:
         texto_fila += f"**{i+1}º** {nome}\n\n"
     placeholder_fila.markdown(texto_fila)
 else:
+
     placeholder_fila.caption("Fila vazia.")
