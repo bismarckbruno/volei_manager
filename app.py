@@ -225,7 +225,8 @@ with tab2:
         st.dataframe(
             df_jogadores.sort_values(by="Elo", ascending=False)
             .style.format({"Elo": "{:.0f}", "Partidas": "{:.0f}", "Vitorias": "{:.0f}"}), 
-            use_container_width=True
+            use_container_width=True,
+            hide_index=True
         )
     
     with st.expander("Cadastrar Novo Jogador neste Grupo", expanded=df_jogadores.empty):
@@ -421,6 +422,7 @@ if 'fila_espera' in st.session_state and st.session_state['fila_espera']:
 else:
 
     placeholder_fila.caption("Fila vazia.")
+
 
 
 
