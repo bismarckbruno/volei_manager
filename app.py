@@ -150,7 +150,7 @@ df_geral = carregar_dados()
 
 # --- SIDEBAR: SELEÇÃO DE GRUPO ---
 with st.sidebar:
-    st.header("👥 Grupo de Jogo")
+    st.header("👥 Grupo")
     
     grupos_opcoes = df_geral['Grupo'].unique().tolist()
     
@@ -421,4 +421,5 @@ if 'fila_espera' in st.session_state and st.session_state['fila_espera']:
 else:
 
     placeholder_fila.caption("Fila vazia.")
+
 
