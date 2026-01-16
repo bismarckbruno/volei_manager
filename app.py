@@ -150,7 +150,7 @@ df_geral = carregar_dados()
 
 # --- SIDEBAR: SELEÇÃO DE GRUPO ---
 with st.sidebar:
-    st.header("👥 Grupo")
+    st.header("👥 Grupos")
     
     grupos_opcoes = df_geral['Grupo'].unique().tolist()
     
@@ -173,7 +173,7 @@ with st.sidebar:
         with st.form("form_cria_grupo"):
             st.subheader("Novo Grupo")
             novo_nome = st.text_input("Nome (ex: Vôlei Terça)")
-            btn_criar = st.form_submit_button("Criar e Selecionar")
+            btn_criar = st.form_submit_button("Criar")
             
             if btn_criar and novo_nome:
                 st.session_state['grupo_atual'] = novo_nome
@@ -421,5 +421,6 @@ if 'fila_espera' in st.session_state and st.session_state['fila_espera']:
 else:
 
     placeholder_fila.caption("Fila vazia.")
+
 
 
