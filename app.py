@@ -3,6 +3,7 @@ from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 from datetime import datetime
 import time
+import pytz
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(page_title="Vôlei Manager", page_icon="🏐", layout="wide")
@@ -110,20 +111,24 @@ def processar_vitoria(time_venc, time_perd, nome_venc_str, grupo_selecionado, t_
     # Salva no Google Sheets
     conn.update(worksheet="Jogadores", data=df_ram)
     st.session_state['cache_jogadores'] = df_ram
-    
+
     # Atualiza Histórico
     try:
+        fuso_br = pytz.timezone('America/Sao_Paulo')
+        data_hora_atual = datetime.now(fuso_br).strftime("%d/%m %H:%M")
+        
         df_h = conn.read(worksheet="Historico", ttl=0).dropna(how="all")
         novo_registro = pd.DataFrame([{
-            "Data": datetime.now().strftime("%d/%m %H:%M"),
+            "Data": data_hora_atual,
             "Time_A": ", ".join(t_a_nomes), 
             "Time_B": ", ".join(t_b_nomes), 
             "Vencedor": nome_venc_str,
             "Grupo": grupo_selecionado
         }])
         conn.update(worksheet="Historico", data=pd.concat([df_h, novo_registro], ignore_index=True))
-    except Exception:
-        pass # Falha no histórico não deve parar o app
+    except Exception as e:
+        print(f"Erro ao salvar histórico: {e}") # Log simples para não travar o app
+        pass 
     
     # Lógica de Streak (Rei da Quadra)
     venc_nomes = time_venc['Nome'].tolist()
@@ -422,6 +427,7 @@ if 'fila_espera' in st.session_state and st.session_state['fila_espera']:
 else:
 
     placeholder_fila.caption("Fila vazia.")
+
 
 
 
