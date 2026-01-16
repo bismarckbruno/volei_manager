@@ -116,8 +116,8 @@ def processar_vitoria(time_venc, time_perd, nome_venc_str, grupo_selecionado, t_
         df_h = conn.read(worksheet="Historico", ttl=0).dropna(how="all")
         novo_registro = pd.DataFrame([{
             "Data": datetime.now().strftime("%d/%m %H:%M"),
-            "TimeA": ", ".join(t_a_nomes), 
-            "TimeB": ", ".join(t_b_nomes), 
+            "Time A": ", ".join(t_a_nomes), 
+            "Time B": ", ".join(t_b_nomes), 
             "Vencedor": nome_venc_str,
             "Grupo": grupo_selecionado
         }])
@@ -422,6 +422,7 @@ if 'fila_espera' in st.session_state and st.session_state['fila_espera']:
 else:
 
     placeholder_fila.caption("Fila vazia.")
+
 
 
 
