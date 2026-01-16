@@ -6,7 +6,7 @@ import time
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(page_title="Vôlei Manager", page_icon="🏐", layout="wide")
-st.title("🏐 Vôlei Manager & Elo")
+st.title("🏐 Vôlei Manager")
 
 # --- CONSTANTES ---
 K_FACTOR = 32
@@ -46,7 +46,7 @@ def carregar_dados():
                 df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0 if c != 'Elo' else 1200)
         
         if 'Grupo' not in df.columns:
-            df['Grupo'] = 'Geral'
+            df['Grupo'] = 'Vôleizin no Parque'
             conn.update(worksheet="Jogadores", data=df)
             
         st.session_state['cache_jogadores'] = df
@@ -155,20 +155,20 @@ with st.sidebar:
     grupos_opcoes = df_geral['Grupo'].unique().tolist()
     
     # Lógica para manter o grupo selecionado ou recém-criado na lista
-    if st.session_state['grupo_atual'] and st.session_state['grupo_atual'] not in grupos_opcoes and st.session_state['grupo_atual'] != "➕ Criar Novo...":
+    if st.session_state['grupo_atual'] and st.session_state['grupo_atual'] not in grupos_opcoes and st.session_state['grupo_atual'] != "➕ Criar novo...":
         grupos_opcoes.append(st.session_state['grupo_atual'])
             
-    opcoes_finais = grupos_opcoes + ["➕ Criar Novo..."]
+    opcoes_finais = grupos_opcoes + ["➕ Criar novo..."]
     
     # Define índice padrão
     idx = 0
     if st.session_state['grupo_atual'] in opcoes_finais:
         idx = opcoes_finais.index(st.session_state['grupo_atual'])
         
-    grupo_selecionado = st.selectbox("Selecionar Grupo:", opcoes_finais, index=idx)
+    grupo_selecionado = st.selectbox("Selecionar grupo:", opcoes_finais, index=idx)
     
     # Criação de Novo Grupo
-    if grupo_selecionado == "➕ Criar Novo...":
+    if grupo_selecionado == "➕ Criar novo...":
         st.markdown("---")
         with st.form("form_cria_grupo"):
             st.subheader("Novo Grupo")
@@ -192,12 +192,12 @@ df_jogadores = df_geral[df_geral['Grupo'] == grupo_selecionado].copy()
 
 # --- SIDEBAR: CONFIGURAÇÕES DA PARTIDA ---
 with st.sidebar:
-    st.header("⚙️ Configuração")
-    tamanho_time = st.radio("Jogadores por Time:", [2, 3, 4, 5, 6], index=4, horizontal=True)
-    limite_vitorias = st.radio("Limite de Vitórias (Rei):", [2, 3, 4, 5, 6], index=1, horizontal=True)
+    st.header("⚙️ Configurações")
+    tamanho_time = st.radio("Jogadores por time:", [2, 3, 4, 5, 6], index=4, horizontal=True)
+    limite_vitorias = st.radio("Limite de vitórias:", [2, 3, 4, 5, 6], index=1, horizontal=True)
     
     st.divider()
-    st.subheader("⏳ Fila de Espera")
+    st.subheader("⏳ Fila de espera")
     placeholder_fila = st.empty() 
     
     st.divider()
@@ -249,7 +249,7 @@ with tab3:
     try:
         df_hist = conn.read(worksheet="Historico", ttl=0).dropna(how="all")
         if 'Grupo' not in df_hist.columns:
-            df_hist['Grupo'] = 'Geral'
+            df_hist['Grupo'] = 'Vôleizin no Parque'
         
         df_hist_filtrado = df_hist[df_hist['Grupo'] == grupo_selecionado]
         
@@ -267,7 +267,7 @@ with tab1:
     else:
         nomes_disponiveis = df_jogadores['Nome'].tolist()
         
-        st.info(f"Grupo Atual: **{grupo_selecionado}**")
+        st.info(f"Grupo atual: **{grupo_selecionado}**")
         
         # Seleção de Jogadores (Form para evitar reload constante)
         with st.form("selecao_jogadores"):
@@ -280,7 +280,7 @@ with tab1:
             defaults_levs = [p for p in st.session_state['todos_levantadores'] if p in presentes]
             levantadores = st.multiselect("Quem são os levantadores?", presentes, default=defaults_levs)
             
-            confirmar = st.form_submit_button("✅ Confirmar Presença")
+            confirmar = st.form_submit_button("✅ Confirmar presença")
         
         if confirmar:
             st.session_state['todos_presentes'] = presentes
@@ -297,7 +297,7 @@ with tab1:
         else:
             col_action, col_info = st.columns([1, 2])
             texto_botao = "🏐 Iniciar novo jogo"
-            if 'jogo_atual' in st.session_state: texto_botao = "🔄 Próxima Rodada"
+            if 'jogo_atual' in st.session_state: texto_botao = "🔄 Próxima rodada"
 
             # --- LÓGICA DE GERAR OS TIMES ---
             if col_action.button(texto_botao, type="primary"):
@@ -338,7 +338,7 @@ with tab1:
                 novos_entrantes = []
                 sobra_para_fila = []
                 
-                # Prioridade: Fila de Espera
+                # Prioridade: Fila de espera
                 fila_atual = [p for p in st.session_state['fila_espera'] if p in candidatos]
                 
                 if len(fila_atual) <= vagas_abertas:
@@ -421,3 +421,4 @@ if 'fila_espera' in st.session_state and st.session_state['fila_espera']:
 else:
 
     placeholder_fila.caption("Fila vazia.")
+
