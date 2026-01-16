@@ -136,7 +136,7 @@ def processar_vitoria(time_venc, time_perd, nome_venc_str, grupo_selecionado, t_
         st.session_state['streak_vitorias'] = 1
         st.session_state['time_vencedor_anterior'] = venc_nomes
     
-    st.toast(f"✅ Resultado Salvo! +{delta:.1f} Elo.")
+    st.toast(f"✅ Resultado salvo! +{delta:.1f} pontos Elo para cada integrante do time vencedor!")
     
     # Limpa o jogo atual para forçar nova organização
     if 'jogo_atual' in st.session_state:
@@ -421,6 +421,7 @@ if 'fila_espera' in st.session_state and st.session_state['fila_espera']:
 else:
 
     placeholder_fila.caption("Fila vazia.")
+
 
 
 
