@@ -335,8 +335,8 @@ with tab2:
         def get_patente_info(elo):
             if elo < 1000: return "🐣 Iniciante", "#f1c40f", "#000000"
             elif elo < 1100: return "🏐 Amador", "#d4ac0d", "#000000"
-            elif elo < 1200: return "🥉 Intermediário", "#1abc9c", "#ffffff"
-            elif elo < 1300: return "🥈 Avançado", "#3498db", "#ffffff"
+            elif elo < 1200: return "🥉 Intermediário", "#1abc9c", "#000000"
+            elif elo < 1300: return "🥈 Avançado", "#3498db", "#000000"
             else: return "💎 Lenda", "#2c3e50", "#ffffff"
 
         if not df_visual.empty:
@@ -385,8 +385,8 @@ with tab3:
 
             def highlight_winner(row):
                 styles = pd.Series('', index=row.index)
-                if row['Vencedor'] == 'Time A' and 'Time A' in row: styles['Time A'] = 'background-color: #3d9df3; font-weight: bold'
-                if row['Vencedor'] == 'Time B' and 'Time B' in row: styles['Time B'] = 'background-color: #f3ce60; font-weight: bold'
+                if row['Vencedor'] == 'Time A' and 'Time A' in row: styles['Time A'] = 'background-color: #3d9df3; color: #0e1117; font-weight: bold'
+                if row['Vencedor'] == 'Time B' and 'Time B' in row: styles['Time B'] = 'background-color: #f3ce60; color: #0e1117; font-weight: bold'
                 return styles
             
             st.dataframe(df_hf.iloc[::-1].style.apply(highlight_winner, axis=1), use_container_width=True, hide_index=True)
@@ -547,3 +547,4 @@ if 'fila_espera' in st.session_state and st.session_state['fila_espera']:
         placeholder_fila.caption("Fila vazia (todos presentes jogando).")
 else:
     placeholder_fila.caption("Fila vazia.")
+
