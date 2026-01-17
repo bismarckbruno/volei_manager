@@ -221,20 +221,93 @@ with st.sidebar:
 tab1, tab2, tab3 = st.tabs(["Quadra (Jogo)", "Ranking", "Histórico"])
 
 # --- ABA 2: RANKING ---
+# --- ABA 2: RANKING ---
 with tab2:
-    st.markdown(f"### Ranking: {grupo_selecionado}")
+    col_titulo, col_filtro = st.columns([1, 1])
     
+    with col_titulo:
+        st.markdown(f"### 🏆 Ranking: {grupo_selecionado}")
+    
+    with col_filtro:
+        # Botão para escolher o tipo de visualização
+        tipo_ranking = st.radio(
+            "Visualização:", 
+            ["Ranking Geral (Todos)", "Apenas quem jogou no último dia"], 
+            horizontal=True,
+            label_visibility="collapsed" # Esconde o rótulo para ficar mais limpo
+        )
+
     if df_jogadores.empty:
         st.info(f"O grupo '{grupo_selecionado}' ainda não tem jogadores. Cadastre abaixo.")
     else:
+        # Cria uma cópia para manipulação visual
+        df_visual = df_jogadores.copy()
+        
+        # --- LÓGICA DE FILTRO (QUEM JOGOU RECENTEMENTE) ---
+        if tipo_ranking == "Apenas quem jogou no último dia":
+            try:
+                # Lê o histórico para descobrir a última data
+                df_h = conn.read(worksheet="Historico", ttl=0).dropna(how="all")
+                
+                # Garante coluna de grupo
+                if 'Grupo' not in df_h.columns: df_h['Grupo'] = 'Geral'
+                
+                # Filtra pelo grupo atual
+                df_h_grupo = df_h[df_h['Grupo'] == grupo_selecionado]
+                
+                if not df_h_grupo.empty:
+                    # Pega a data da última partida registrada (assumindo ordem de inserção)
+                    ultima_data_completa = df_h_grupo.iloc[-1]['Data'] 
+                    # Extrai apenas o dia/mês (ex: "16/01") para pegar todas partidas do dia
+                    dia_referencia = ultima_data_completa.split(" ")[0] 
+                    
+                    st.caption(f"📅 Exibindo jogadores presentes em: **{dia_referencia}**")
+                    
+                    # Filtra linhas do histórico que contém essa data
+                    jogos_do_dia = df_h_grupo[df_h_grupo['Data'].str.contains(dia_referencia, na=False)]
+                    
+                    # Extrai todos os nomes dos times A e B desses jogos
+                    nomes_presentes = set()
+                    for _, row in jogos_do_dia.iterrows():
+                        nomes_presentes.update(row['Time_A'].split(", "))
+                        nomes_presentes.update(row['Time_B'].split(", "))
+                    
+                    # Filtra o DataFrame principal de jogadores
+                    df_visual = df_visual[df_visual['Nome'].isin(nomes_presentes)]
+                    
+                    if df_visual.empty:
+                        st.warning("Nenhum jogador encontrado para a data filtrada.")
+                else:
+                    st.warning("Sem histórico para filtrar recentes. Mostrando geral.")
+            except Exception as e:
+                st.error(f"Erro ao filtrar histórico: {e}")
+
+        # --- LÓGICA DE ORDENAÇÃO E MEDALHAS ---
+        # Ordena por Elo (Do maior para o menor)
+        df_visual = df_visual.sort_values(by="Elo", ascending=False).reset_index(drop=True)
+        
+        # Função para gerar as medalhas
+        def gerar_posicao(index):
+            pos = index + 1
+            if pos == 1: return "🥇 1º"
+            if pos == 2: return "🥈 2º"
+            if pos == 3: return "🥉 3º"
+            return f"{pos}º" # Retorna ordinal normal (4º, 5º...)
+
+        # Cria a coluna de Posição como a primeira coluna
+        if not df_visual.empty:
+            df_visual.insert(0, 'Pos.', [gerar_posicao(i) for i in range(len(df_visual))])
+
+        # Exibe a tabela bonitona
         st.dataframe(
-            df_jogadores.sort_values(by="Elo", ascending=False)
-            .style.format({"Elo": "{:.0f}", "Partidas": "{:.0f}", "Vitorias": "{:.0f}"}), 
+            df_visual.style.format({"Elo": "{:.0f}", "Partidas": "{:.0f}", "Vitorias": "{:.0f}"}), 
             use_container_width=True,
-            hide_index=True
+            hide_index=True, # Esconde o índice numérico padrão do pandas (0, 1, 2)
+            height=500 # Altura fixa para scrollar se a lista for grande
         )
     
-    with st.expander("Cadastrar Novo Jogador neste Grupo", expanded=df_jogadores.empty):
+    st.markdown("---")
+    with st.expander("➕ Cadastrar Novo Jogador neste Grupo", expanded=False):
         with st.form("novo_jogador"):
             nome_input = st.text_input("Nome")
             elo_input = st.number_input("Elo Inicial", 1200, step=50)
@@ -440,6 +513,7 @@ if 'fila_espera' in st.session_state and st.session_state['fila_espera']:
 else:
 
     placeholder_fila.caption("Fila vazia.")
+
 
 
 
