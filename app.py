@@ -11,6 +11,7 @@ st.title("🏐 Vôlei Manager")
 
 # --- CONSTANTES ---
 K_FACTOR = 32
+nome_padrao_caso_coluna_geral_inexistente = 'Vôleizin no Parque'
 
 # --- CONEXÃO ---
 conn = st.connection("gsheets", type=GSheetsConnection)
@@ -47,7 +48,7 @@ def carregar_dados():
                 df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0 if c != 'Elo' else 1200)
         
         if 'Grupo' not in df.columns:
-            df['Grupo'] = 'Vôleizin no Parque'
+            df['Grupo'] = nome_padrao_caso_coluna_geral_inexistente
             conn.update(worksheet="Jogadores", data=df)
             
         st.session_state['cache_jogadores'] = df
@@ -221,7 +222,6 @@ with st.sidebar:
 tab1, tab2, tab3 = st.tabs(["Quadra (Jogo)", "Ranking", "Histórico"])
 
 # --- ABA 2: RANKING ---
-# --- ABA 2: RANKING ---
 with tab2:
     col_titulo, col_filtro = st.columns([1, 1])
     
@@ -250,7 +250,7 @@ with tab2:
                 df_h = conn.read(worksheet="Historico", ttl=0).dropna(how="all")
                 
                 # Garante coluna de grupo
-                if 'Grupo' not in df_h.columns: df_h['Grupo'] = 'Geral'
+                if 'Grupo' not in df_h.columns: df_h['Grupo'] = nome_padrao_caso_coluna_geral_inexistente
                 
                 # Filtra pelo grupo atual
                 df_h_grupo = df_h[df_h['Grupo'] == grupo_selecionado]
@@ -269,8 +269,8 @@ with tab2:
                     # Extrai todos os nomes dos times A e B desses jogos
                     nomes_presentes = set()
                     for _, row in jogos_do_dia.iterrows():
-                        nomes_presentes.update(row['Time_A'].split(", "))
-                        nomes_presentes.update(row['Time_B'].split(", "))
+                        nomes_presentes.update(row['Time A'].split(", "))
+                        nomes_presentes.update(row['Time B'].split(", "))
                     
                     # Filtra o DataFrame principal de jogadores
                     df_visual = df_visual[df_visual['Nome'].isin(nomes_presentes)]
@@ -328,7 +328,7 @@ with tab3:
     try:
         df_hist = conn.read(worksheet="Historico", ttl=0).dropna(how="all")
         if 'Grupo' not in df_hist.columns:
-            df_hist['Grupo'] = 'Vôleizin no Parque'
+            df_hist['Grupo'] = nome_padrao_caso_coluna_geral_inexistente
         
         df_hist_filtrado = df_hist[df_hist['Grupo'] == grupo_selecionado]
         
@@ -513,6 +513,7 @@ if 'fila_espera' in st.session_state and st.session_state['fila_espera']:
 else:
 
     placeholder_fila.caption("Fila vazia.")
+
 
 
 
