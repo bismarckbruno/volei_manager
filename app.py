@@ -14,23 +14,23 @@ st.title("🏐 Vôlei Manager")
 
 # --- CONSTANTES ---
 K_FACTOR = 32
-STATE_FILE = "voley_state.json" # Arquivo local para salvar estado (Cache)
+STATE_FILE = "voley_state.json" 
 
 # --- CONEXÃO ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 # --- PERSISTÊNCIA LOCAL (CACHE) ---
 def salvar_estado_disco():
-    """Salva o estado crítico em um JSON local para sobreviver ao F5 sem gastar cota do Google."""
     estado = {
         'fila_espera': st.session_state.get('fila_espera', []),
         'streak_vitorias': st.session_state.get('streak_vitorias', 0),
         'time_vencedor_anterior': st.session_state.get('time_vencedor_anterior', None),
         'jogo_atual_serializado': None,
-        'grupo_atual': st.session_state.get('grupo_atual', None)
+        'grupo_atual': st.session_state.get('grupo_atual', None),
+        'todos_presentes': st.session_state.get('todos_presentes', []),
+        'todos_levantadores': st.session_state.get('todos_levantadores', [])
     }
     
-    # Precisamos serializar os DataFrames do jogo atual para JSON
     if 'jogo_atual' in st.session_state:
         estado['jogo_atual_serializado'] = {
             'A': st.session_state['jogo_atual']['A'].to_dict('records'),
@@ -44,7 +44,6 @@ def salvar_estado_disco():
         print(f"Erro ao salvar cache local: {e}")
 
 def carregar_estado_disco():
-    """Recupera o estado do arquivo JSON se existir."""
     if os.path.exists(STATE_FILE):
         try:
             with open(STATE_FILE, 'r') as f:
@@ -54,6 +53,8 @@ def carregar_estado_disco():
             st.session_state['streak_vitorias'] = estado.get('streak_vitorias', 0)
             st.session_state['time_vencedor_anterior'] = estado.get('time_vencedor_anterior', None)
             st.session_state['grupo_atual'] = estado.get('grupo_atual', None)
+            st.session_state['todos_presentes'] = estado.get('todos_presentes', [])
+            st.session_state['todos_levantadores'] = estado.get('todos_levantadores', [])
             
             if estado.get('jogo_atual_serializado'):
                 st.session_state['jogo_atual'] = {
@@ -68,9 +69,8 @@ def carregar_estado_disco():
 
 # --- INICIALIZAÇÃO DE ESTADO ---
 def inicializar_session_state():
-    # Tenta carregar do disco primeiro se não houver estado na memória
     if 'iniciado' not in st.session_state:
-        carregou = carregar_estado_disco()
+        carregar_estado_disco()
         st.session_state['iniciado'] = True
     
     chaves_padrao = {
@@ -109,39 +109,29 @@ def carregar_dados():
 
 # --- FUNÇÕES LÓGICAS E UTILITÁRIAS ---
 def realizar_substituicao(jogador_saindo, time_alvo_str):
-    """
-    Remove jogador da quadra, coloca no fim da fila.
-    Pega o 1º da fila e coloca em quadra.
-    """
     if not st.session_state['fila_espera']:
         st.toast("⚠️ A fila de espera está vazia! Não há quem colocar no lugar.")
         return
 
-    # 1. Identificar quem entra e quem sai
-    jogador_entrando = st.session_state['fila_espera'].pop(0) # Tira o primeiro da fila
+    # Quem entra e quem sai
+    jogador_entrando = st.session_state['fila_espera'].pop(0) 
     
-    # 2. Atualizar a Fila (Quem sai vai pro fim)
+    # Atualiza a Fila (Quem sai vai pro fim)
     st.session_state['fila_espera'].append(jogador_saindo)
     
-    # 3. Atualizar DataFrames do Jogo
+    # Atualiza DataFrames do Jogo
     time_df = st.session_state['jogo_atual'][time_alvo_str]
-    
-    # Pega os dados completos de quem está entrando (do cache geral)
     df_geral = st.session_state['cache_jogadores']
     dados_novo = df_geral[(df_geral['Nome'] == jogador_entrando) & (df_geral['Grupo'] == st.session_state['grupo_atual'])].iloc[0]
     
-    # Remove quem sai e adiciona quem entra no DataFrame do time
     idx_sair = time_df[time_df['Nome'] == jogador_saindo].index
     time_df = time_df.drop(idx_sair)
     
-    # Adiciona o novo jogador (convertendo Series para DF para concatenar)
     novo_df = pd.DataFrame([dados_novo])
     time_df = pd.concat([time_df, novo_df], ignore_index=True)
     
-    # Salva no estado
     st.session_state['jogo_atual'][time_alvo_str] = time_df
-    
-    salvar_estado_disco() # Salva mudança
+    salvar_estado_disco()
     st.rerun()
 
 def calcular_novo_elo(rating_vencedor, rating_perdedor):
@@ -175,7 +165,7 @@ def processar_vitoria(time_venc, time_perd, nome_venc_str, grupo_selecionado, t_
     
     df_ram = st.session_state['cache_jogadores']
     
-    # Atualiza Vencedores
+    # Atualiza Elo
     for n in time_venc['Nome']:
         idx = df_ram.index[(df_ram['Nome'] == n) & (df_ram['Grupo'] == grupo_selecionado)]
         if not idx.empty:
@@ -183,14 +173,12 @@ def processar_vitoria(time_venc, time_perd, nome_venc_str, grupo_selecionado, t_
             df_ram.loc[idx, 'Partidas'] += 1
             df_ram.loc[idx, 'Vitorias'] += 1
             
-    # Atualiza Perdedores
     for n in time_perd['Nome']:
         idx = df_ram.index[(df_ram['Nome'] == n) & (df_ram['Grupo'] == grupo_selecionado)]
         if not idx.empty:
             df_ram.loc[idx, 'Elo'] -= delta
             df_ram.loc[idx, 'Partidas'] += 1
     
-    # Salva no Google Sheets
     conn.update(worksheet="Jogadores", data=df_ram)
     st.session_state['cache_jogadores'] = df_ram
     
@@ -200,7 +188,6 @@ def processar_vitoria(time_venc, time_perd, nome_venc_str, grupo_selecionado, t_
         data_hora_atual = datetime.now(fuso_br).strftime("%d/%m %H:%M")
         
         df_h = conn.read(worksheet="Historico", ttl=0).dropna(how="all")
-        
         novo_registro = pd.DataFrame([{
             "Data": data_hora_atual,
             "Time A": ", ".join(t_a_nomes), 
@@ -213,7 +200,6 @@ def processar_vitoria(time_venc, time_perd, nome_venc_str, grupo_selecionado, t_
             conn.update(worksheet="Historico", data=novo_registro)
         else:
             conn.update(worksheet="Historico", data=pd.concat([df_h, novo_registro], ignore_index=True))
-            
     except Exception as e:
         print(f"Erro ao salvar histórico: {e}")
     
@@ -232,7 +218,7 @@ def processar_vitoria(time_venc, time_perd, nome_venc_str, grupo_selecionado, t_
     if 'jogo_atual' in st.session_state:
         del st.session_state['jogo_atual']
     
-    salvar_estado_disco() # Atualiza o cache local
+    salvar_estado_disco()
     time.sleep(1)
     st.rerun()
 
@@ -254,7 +240,6 @@ with st.sidebar:
     grupo_selecionado = st.selectbox("Selecionar grupo:", opcoes_finais, index=idx)
     
     if grupo_selecionado == "➕ Criar novo...":
-        st.markdown("---")
         with st.form("form_cria_grupo"):
             st.subheader("Novo Grupo")
             novo_nome = st.text_input("Nome")
@@ -290,14 +275,15 @@ with st.sidebar:
             st.rerun()
     with col_btn2:
         if st.button("⚠️ Resetar"):
-            for key in ['jogo_atual', 'fila_espera', 'streak_vitorias', 'time_vencedor_anterior', 'todos_presentes']:
+            for key in ['jogo_atual', 'fila_espera', 'streak_vitorias', 'time_vencedor_anterior', 'todos_presentes', 'todos_levantadores']:
                 if key in st.session_state: del st.session_state[key]
-            if os.path.exists(STATE_FILE): os.remove(STATE_FILE) # Limpa cache local
+            if os.path.exists(STATE_FILE): os.remove(STATE_FILE)
             st.rerun()
 
-# --- ABA 2: RANKING (MELHORADO) ---
+# --- ABAS ---
 tab1, tab2, tab3 = st.tabs(["Quadra (Jogo)", "Ranking", "Histórico"])
 
+# --- ABA 2: RANKING ---
 with tab2:
     col_titulo, col_filtro = st.columns([1, 1])
     with col_titulo: st.markdown(f"### 🏆 Ranking: {grupo_selecionado}")
@@ -307,7 +293,6 @@ with tab2:
     if not df_jogadores.empty:
         df_visual = df_jogadores.copy()
         
-        # Filtro de último dia (Lógica mantida do original)
         if tipo_ranking == "Último dia":
             try:
                 df_h = conn.read(worksheet="Historico", ttl=0).dropna(how="all")
@@ -329,24 +314,21 @@ with tab2:
 
         df_visual = df_visual.sort_values(by="Elo", ascending=False).reset_index(drop=True)
 
-        # --- NOVA LÓGICA DE CORES E PATENTES ---
         def get_patente_info(elo):
-            if elo < 1000: return "🐣 Iniciante", "#f1c40f", "#000000" # Amarelo
-            elif elo < 1100: return "🏐 Amador", "#d4ac0d", "#000000" # Amarelo Escuro
-            elif elo < 1200: return "🥉 Intermediário", "#1abc9c", "#ffffff" # Verde-Azul
-            elif elo < 1300: return "🥈 Avançado", "#3498db", "#ffffff" # Azul
-            else: return "💎 Lenda", "#2c3e50", "#ffffff" # Azul Escuro
+            if elo < 1000: return "🐣 Iniciante", "#f1c40f", "#000000"
+            elif elo < 1100: return "🏐 Amador", "#d4ac0d", "#000000"
+            elif elo < 1200: return "🥉 Intermediário", "#1abc9c", "#ffffff"
+            elif elo < 1300: return "🥈 Avançado", "#3498db", "#ffffff"
+            else: return "💎 Lenda", "#2c3e50", "#ffffff"
 
         if not df_visual.empty:
             patentes = [get_patente_info(e) for e in df_visual['Elo']]
             df_visual.insert(1, 'Patente', [p[0] for p in patentes])
             df_visual.insert(0, 'Pos.', [f"{i+1}º" for i in range(len(df_visual))])
 
-            # Estilização
             def colorir_tabela(row):
                 elo = row['Elo']
                 _, bg_color, text_color = get_patente_info(elo)
-                # Pinta Patente e Elo
                 estilo = [f'background-color: {bg_color}; color: {text_color}' if col in ['Patente', 'Elo'] else '' for col in row.index]
                 return estilo
 
@@ -356,7 +338,6 @@ with tab2:
                 use_container_width=True, hide_index=True, height=500
             )
 
-    # Cadastro (Mantido igual)
     with st.expander("➕ Cadastrar Novo Jogador"):
         with st.form("novo_jogador"):
             nome_input = st.text_input("Nome")
@@ -372,11 +353,21 @@ with tab3:
     col_h_t, col_h_f = st.columns([1, 1])
     with col_h_t: st.markdown(f"### 📜 Histórico: {grupo_selecionado}")
     
+    # REINSERIDO: Lógica de Filtro "Geral" vs "Último dia"
+    with col_h_f:
+        tipo_historico = st.radio("Visualização Histórico:", ["Geral", "Último dia"], horizontal=True, label_visibility="collapsed", key="hist_view")
+
     try:
         df_hist = conn.read(worksheet="Historico", ttl=0).dropna(how="all")
         df_hf = df_hist[df_hist['Grupo'] == grupo_selecionado].copy()
         
         if not df_hf.empty:
+            # Lógica de Filtro igual ao Ranking
+            if tipo_historico == "Último dia":
+                ultima_data_hist = df_hf.iloc[-1]['Data'].split(" ")[0]
+                st.caption(f"📅 Exibindo partidas do dia: **{ultima_data_hist}**")
+                df_hf = df_hf[df_hf['Data'].str.contains(ultima_data_hist, na=False)]
+
             def highlight_winner(row):
                 styles = pd.Series('', index=row.index)
                 if row['Vencedor'] == 'Time A' and 'Time A' in row: styles['Time A'] = 'background-color: #3d9df3; font-weight: bold'
@@ -385,7 +376,7 @@ with tab3:
             
             st.dataframe(df_hf.iloc[::-1].style.apply(highlight_winner, axis=1), use_container_width=True, hide_index=True)
         else: st.info("Sem histórico.")
-    except Exception as e: st.warning("Carregando histórico...")
+    except Exception as e: st.warning(f"Aguardando dados... {e}")
 
 # --- ABA 1: QUADRA (JOGO) ---
 with tab1:
@@ -403,7 +394,7 @@ with tab1:
             if st.form_submit_button("Confirmar"):
                 st.session_state['todos_presentes'] = pres
                 st.session_state['todos_levantadores'] = levs
-                salvar_estado_disco() # Salva configuração
+                salvar_estado_disco() 
                 st.rerun()
 
         pres_final = st.session_state['todos_presentes']
@@ -415,16 +406,15 @@ with tab1:
             txt_btn = "🔄 Próxima rodada" if 'jogo_atual' in st.session_state else "🏐 Iniciar Jogo"
             
             if col_act.button(txt_btn, type="primary"):
-                # Garante lista limpa se não existir
                 if 'fila_espera' not in st.session_state: st.session_state['fila_espera'] = []
                 
                 venc_garantidos = []
                 streak = st.session_state.get('streak_vitorias', 0)
                 
-                # 1. Lógica Rei da Quadra
+                # 1. Rei da Quadra
                 if st.session_state['time_vencedor_anterior'] and streak < limite_vitorias:
                     venc_garantidos = [p for p in st.session_state['time_vencedor_anterior'] if p in pres_final]
-                    if len(venc_garantidos) != tamanho_time: # Se time quebrou, reseta
+                    if len(venc_garantidos) != tamanho_time:
                         venc_garantidos = []
                         st.session_state['streak_vitorias'] = 0
                         st.session_state['time_vencedor_anterior'] = None
@@ -432,33 +422,39 @@ with tab1:
                     st.session_state['streak_vitorias'] = 0
                     st.session_state['time_vencedor_anterior'] = None
 
-                # 2. Definição de Vagas e Fila
+                # 2. Definição de Vagas
                 vagas = nec - len(venc_garantidos)
                 candidatos = [p for p in pres_final if p not in venc_garantidos]
                 
+                # Garante que a fila só tem gente que está presente e não é vencedor garantido
+                fila_limpa = [p for p in st.session_state['fila_espera'] if p in candidatos]
+                
                 novos_jogar = []
                 
-                # Prioridade: Quem já está na fila
-                fila_real = [p for p in st.session_state['fila_espera'] if p in candidatos]
+                # Pega da fila primeiro
+                novos_jogar.extend(fila_limpa[:vagas])
                 
-                # Remove da fila quem vai jogar agora
-                for p in fila_real[:vagas]:
-                    novos_jogar.append(p)
-                    st.session_state['fila_espera'].remove(p) # Remove da fila
-                
-                # Se ainda faltam vagas, pega do resto
+                # Se ainda faltar, sorteia do resto
                 faltam = vagas - len(novos_jogar)
+                
+                # Quem não jogou e não estava na fila
+                resto_candidatos = [p for p in candidatos if p not in novos_jogar and p not in fila_limpa]
+                random.shuffle(resto_candidatos)
+                
                 if faltam > 0:
-                    resto = [p for p in candidatos if p not in novos_jogar and p not in st.session_state['fila_espera']]
-                    random.shuffle(resto) # Sorteia a ordem de entrada do resto
-                    
-                    novos_jogar.extend(resto[:faltam])
-                    
-                    # Quem sobrou (não jogou e não estava na fila) vai pro fim da fila
-                    # E aqui está o TRUQUE: Embaralhar antes de colocar na fila
-                    sobra = resto[faltam:]
-                    random.shuffle(sobra) 
-                    st.session_state['fila_espera'].extend(sobra)
+                    novos_jogar.extend(resto_candidatos[:faltam])
+                    sobra_para_fila = resto_candidatos[faltam:]
+                else:
+                    sobra_para_fila = resto_candidatos
+
+                # --- CORREÇÃO CRÍTICA DA FILA ---
+                # A nova fila deve ser: 
+                # (Quem estava na fila e não entrou) + (Quem sobrou do sorteio atual misturado)
+                quem_estava_fila_e_sobrou = fila_limpa[vagas:] if len(fila_limpa) > vagas else []
+                
+                random.shuffle(sobra_para_fila) # Mistura quem entra novo na fila
+                
+                st.session_state['fila_espera'] = quem_estava_fila_e_sobrou + sobra_para_fila
                 
                 # 3. Montar Times
                 pool = venc_garantidos + novos_jogar
@@ -477,14 +473,24 @@ with tab1:
             if 'jogo_atual' in st.session_state:
                 t_a = st.session_state['jogo_atual']['A']
                 t_b = st.session_state['jogo_atual']['B']
+                streak = st.session_state.get('streak_vitorias', 0)
                 
                 st.divider()
                 cA, cM, cB = st.columns([4, 1, 4])
                 
-                # Função auxiliar para renderizar time com botão de troca
                 def render_team(team_df, team_name, container):
                     with container:
-                        st.markdown(f"### {('🛡️' if team_name == 'A' else '⚔️')} Time {team_name} ({team_df['Elo'].mean():.0f})")
+                        # REINSERIDO: Indicador Visual de Streak
+                        is_streak = streak > 0 and \
+                                    st.session_state.get('time_vencedor_anterior') and \
+                                    set(team_df['Nome']) == set(st.session_state['time_vencedor_anterior'])
+                        
+                        titulo = f"🛡️ Time {team_name}" if team_name == 'A' else f"⚔️ Time {team_name}"
+                        st.markdown(f"### {titulo} ({team_df['Elo'].mean():.0f})")
+                        
+                        if is_streak:
+                            st.caption(f"👑 Reis da Quadra ({streak}/{limite_vitorias} vitórias)")
+                        
                         for _, row in team_df.iterrows():
                             c_nome, c_btn = st.columns([4, 1])
                             icon = "🤲" if row['Nome'] in lev_final else "👤"
@@ -495,7 +501,6 @@ with tab1:
                         st.markdown("---")
                         if st.button(f"VITÓRIA TIME {team_name} 🏆", use_container_width=True, key=f"win_{team_name}"):
                             other = t_b if team_name == 'A' else t_a
-                            other_n = "Time B" if team_name == 'A' else "Time A"
                             processar_vitoria(team_df, other, f"Time {team_name}", grupo_selecionado, t_a['Nome'], t_b['Nome'])
 
                 render_team(t_a, 'A', cA)
@@ -504,7 +509,12 @@ with tab1:
 
 # --- ATUALIZAÇÃO FINAL DA FILA (Sempre visível) ---
 if 'fila_espera' in st.session_state and st.session_state['fila_espera']:
-    txt = "\n".join([f"**{i+1}º** {n}" for i, n in enumerate(st.session_state['fila_espera'])])
-    placeholder_fila.markdown(txt)
+    # Filtra visualmente apenas quem está presente para não confundir
+    fila_visivel = [p for p in st.session_state['fila_espera'] if p in st.session_state.get('todos_presentes', [])]
+    if fila_visivel:
+        txt = "\n".join([f"**{i+1}º** {n}" for i, n in enumerate(fila_visivel)])
+        placeholder_fila.markdown(txt)
+    else:
+        placeholder_fila.caption("Fila vazia (todos presentes jogando).")
 else:
     placeholder_fila.caption("Fila vazia.")
