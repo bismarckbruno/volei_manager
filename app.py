@@ -11,7 +11,6 @@ st.title("🏐 Vôlei Manager")
 
 # --- CONSTANTES ---
 K_FACTOR = 32
-nome_padrao_caso_coluna_geral_inexistente = 'Vôleizin no Parque'
 
 # --- CONEXÃO ---
 conn = st.connection("gsheets", type=GSheetsConnection)
@@ -47,9 +46,7 @@ def carregar_dados():
             if c in df.columns:
                 df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0 if c != 'Elo' else 1200)
         
-        if 'Grupo' not in df.columns:
-            df['Grupo'] = nome_padrao_caso_coluna_geral_inexistente
-            conn.update(worksheet="Jogadores", data=df)
+        # REMOVIDA A VERIFICAÇÃO DE CRIAÇÃO DA COLUNA GRUPO AQUI
             
         st.session_state['cache_jogadores'] = df
         return df
@@ -119,6 +116,7 @@ def processar_vitoria(time_venc, time_perd, nome_venc_str, grupo_selecionado, t_
         data_hora_atual = datetime.now(fuso_br).strftime("%d/%m %H:%M")
         
         df_h = conn.read(worksheet="Historico", ttl=0).dropna(how="all")
+        
         novo_registro = pd.DataFrame([{
             "Data": data_hora_atual,
             "Time A": ", ".join(t_a_nomes), 
@@ -126,7 +124,13 @@ def processar_vitoria(time_venc, time_perd, nome_venc_str, grupo_selecionado, t_
             "Vencedor": nome_venc_str,
             "Grupo": grupo_selecionado
         }])
-        conn.update(worksheet="Historico", data=pd.concat([df_h, novo_registro], ignore_index=True))
+        
+        # Garante que colunas vazias não quebrem o concat se for a primeira linha
+        if df_h.empty:
+            conn.update(worksheet="Historico", data=novo_registro)
+        else:
+            conn.update(worksheet="Historico", data=pd.concat([df_h, novo_registro], ignore_index=True))
+            
     except Exception as e:
         print(f"Erro ao salvar histórico: {e}") # Log simples para não travar o app
         pass 
@@ -231,10 +235,11 @@ with tab2:
     with col_filtro:
         # Botão para escolher o tipo de visualização
         tipo_ranking = st.radio(
-            "Visualização:", 
+            "Visualização Ranking:", 
             ["Ranking Geral (Todos)", "Apenas quem jogou no último dia"], 
             horizontal=True,
-            label_visibility="collapsed" # Esconde o rótulo para ficar mais limpo
+            label_visibility="collapsed", # Esconde o rótulo para ficar mais limpo
+            key="filtro_ranking"
         )
 
     if df_jogadores.empty:
@@ -249,8 +254,7 @@ with tab2:
                 # Lê o histórico para descobrir a última data
                 df_h = conn.read(worksheet="Historico", ttl=0).dropna(how="all")
                 
-                # Garante coluna de grupo
-                if 'Grupo' not in df_h.columns: df_h['Grupo'] = nome_padrao_caso_coluna_geral_inexistente
+                # REMOVIDA A VERIFICAÇÃO DE GRUPO AQUI
                 
                 # Filtra pelo grupo atual
                 df_h_grupo = df_h[df_h['Grupo'] == grupo_selecionado]
@@ -329,20 +333,49 @@ with tab2:
                 time.sleep(1)
                 st.rerun()
 
-# --- ABA 3: HISTÓRICO (MODIFICADA) --- 
+# --- ABA 3: HISTÓRICO (MODIFICADA COM FILTROS) --- 
 with tab3:
-    st.markdown(f"### 📜 Histórico: {grupo_selecionado}")
+    # Divisão do Topo: Título e Filtro
+    col_h_titulo, col_h_filtro = st.columns([1, 1])
+    
+    with col_h_titulo:
+        st.markdown(f"### 📜 Histórico: {grupo_selecionado}")
+    
+    with col_h_filtro:
+         # Botão para escolher o tipo de visualização (Igual Aba 2)
+        tipo_historico = st.radio(
+            "Visualização Histórico:", 
+            ["Histórico Geral (Todos)", "Apenas quem jogou no último dia"], 
+            horizontal=True,
+            label_visibility="collapsed",
+            key="filtro_historico"
+        )
+
     try:
         df_hist = conn.read(worksheet="Historico", ttl=0).dropna(how="all")
-        if 'Grupo' not in df_hist.columns:
-            df_hist['Grupo'] = nome_padrao_caso_coluna_geral_inexistente
         
-        df_hist_filtrado = df_hist[df_hist['Grupo'] == grupo_selecionado]
+        # REMOVIDA A VERIFICAÇÃO DE GRUPO AQUI
+        
+        df_hist_filtrado = df_hist[df_hist['Grupo'] == grupo_selecionado].copy()
         
         if df_hist_filtrado.empty:
              st.info("Nenhuma partida encontrada para este grupo.")
         else:
-            # --- NOVA LÓGICA DE CORES: Destacar apenas a célula do time vencedor ---
+            # --- LÓGICA DE FILTRO POR DATA (Se selecionado) ---
+            if tipo_historico == "Apenas quem jogou no último dia":
+                # Pega a última data registrada neste grupo
+                ultima_data = df_hist_filtrado.iloc[-1]['Data']
+                # Pega apenas o dia/mês (dd/mm), ignorando a hora se necessário, 
+                # ou usa string inteira dependendo de como quer filtrar.
+                # Aqui usamos split[0] para pegar "dd/mm"
+                dia_referencia = ultima_data.split(" ")[0]
+                
+                st.caption(f"📅 Exibindo partidas do dia: **{dia_referencia}**")
+                
+                # Filtra apenas linhas que contém essa data
+                df_hist_filtrado = df_hist_filtrado[df_hist_filtrado['Data'].str.contains(dia_referencia, na=False)]
+
+            # --- LÓGICA DE CORES: Destacar apenas a célula do time vencedor ---
             def destacar_time_vencedor(row):
                 # Cria uma lista de estilos vazios para todas as colunas
                 styles = pd.Series('', index=row.index)
@@ -368,7 +401,7 @@ with tab3:
                 hide_index=True
             )
     except Exception as e: 
-        st.warning("Aguardando dados ou conexão...")
+        st.warning(f"Aguardando dados ou conexão... Erro: {e}")
 
 # --- ABA 1: A QUADRA ---
 with tab1:
@@ -530,6 +563,3 @@ if 'fila_espera' in st.session_state and st.session_state['fila_espera']:
     placeholder_fila.markdown(texto_fila)
 else:
     placeholder_fila.caption("Fila vazia.")
-
-
-
