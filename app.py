@@ -348,8 +348,8 @@ with tab3:
                 styles = pd.Series('', index=row.index)
                 
                 # Cores
-                cor_time_a = 'color: #dbeafe; font-weight: bold' # Azul Claro
-                cor_time_b = 'color: #ffedd5; font-weight: bold' # Laranja Claro
+                cor_time_a = 'background-color: #15181e; color: #3d9df3; font-weight: bold' # Azul Claro
+                cor_time_b = 'background-color: #15181e; color: #f3ce60; font-weight: bold' # Laranja Claro
                 
                 # Verifica quem venceu e pinta a coluna correspondente
                 vencedor = row['Vencedor']
@@ -530,4 +530,5 @@ if 'fila_espera' in st.session_state and st.session_state['fila_espera']:
     placeholder_fila.markdown(texto_fila)
 else:
     placeholder_fila.caption("Fila vazia.")
+
 
