@@ -249,7 +249,7 @@ with tab2:
                 time.sleep(1)
                 st.rerun()
 
-# --- ABA 3: HISTÓRICO ---
+# --- ABA 3: HISTÓRICO --- 
 with tab3:
     st.markdown(f"### 📜 Histórico ({grupo_selecionado})")
     try:
@@ -262,7 +262,20 @@ with tab3:
         if df_hist_filtrado.empty:
              st.info("Nenhuma partida encontrada para este grupo.")
         else:
-             st.dataframe(df_hist_filtrado.iloc[::-1], use_container_width=True, hide_index=True)
+            # --- LÓGICA DE CORES ---
+            def destacar_vencedor(valor):
+                if valor == 'Time A':
+                    return 'background-color: #dbeafe; color: #1e3a8a; font-weight: bold' # Azul Claro
+                elif valor == 'Time B':
+                    return 'background-color: #ffedd5; color: #9a3412; font-weight: bold' # Laranja Claro
+                return ''
+
+            # Aplica o estilo apenas na coluna 'Vencedor'
+            st.dataframe(
+                df_hist_filtrado.iloc[::-1].style.map(destacar_vencedor, subset=['Vencedor']),
+                use_container_width=True,
+                hide_index=True
+            )
     except Exception as e: 
         st.warning("Aguardando dados ou conexão...")
 
@@ -427,6 +440,7 @@ if 'fila_espera' in st.session_state and st.session_state['fila_espera']:
 else:
 
     placeholder_fila.caption("Fila vazia.")
+
 
 
 
