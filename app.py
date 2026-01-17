@@ -490,18 +490,19 @@ with tab1:
                     novos_entrantes.extend(fila_atual[:vagas_abertas])
                     sobra_para_fila.extend(fila_atual[vagas_abertas:])
                 
-                # Completa com o resto (Melhores Elos primeiro)
+                # Completa com o resto (Democrático: considera sorte e tempo de espera)
                 vagas_restantes = vagas_abertas - len(novos_entrantes)
                 quem_nao_entrou_pela_fila = [p for p in candidatos if p not in novos_entrantes and p not in sobra_para_fila]
                 
                 if vagas_restantes > 0:
-                    df_resto = df_jogadores[df_jogadores['Nome'].isin(quem_nao_entrou_pela_fila)].sort_values(by='Elo', ascending=False)
+                    # Filtra os candidatos e EMBARALHA aleatoriamente (.sample)
+                    df_resto = df_jogadores[df_jogadores['Nome'].isin(quem_nao_entrou_pela_fila)].sample(frac=1)
+    
                     melhores_resto = df_resto.head(vagas_restantes)['Nome'].tolist()
                     piores_resto = df_resto.tail(len(df_resto) - vagas_restantes)['Nome'].tolist()
+    
                     novos_entrantes.extend(melhores_resto)
-                    sobra_para_fila.extend(piores_resto)
-                else:
-                    sobra_para_fila.extend(quem_nao_entrou_pela_fila)
+                    sobra_para_fila.extend(piores_resto) # Quem deu azar vai pra fila e garantirá o próximo
 
                 # Atualiza Fila
                 st.session_state['fila_espera'] = sobra_para_fila
@@ -563,5 +564,6 @@ if 'fila_espera' in st.session_state and st.session_state['fila_espera']:
     placeholder_fila.markdown(texto_fila)
 else:
     placeholder_fila.caption("Fila vazia.")
+
 
 
