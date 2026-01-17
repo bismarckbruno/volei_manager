@@ -7,6 +7,7 @@ import pytz
 import random
 import json
 import os
+import re
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(page_title="Vôlei Manager", page_icon="🏐", layout="wide")
@@ -14,19 +15,29 @@ st.title("🏐 Vôlei Manager")
 
 # --- CONSTANTES ---
 K_FACTOR = 32
-STATE_FILE = "voley_state.json" 
 
 # --- CONEXÃO ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# --- PERSISTÊNCIA LOCAL (CACHE) ---
+# --- GERENCIAMENTO DE ARQUIVOS DE ESTADO (MULTIGRUPO) ---
+def get_arquivo_estado(nome_grupo):
+    """Gera um nome de arquivo seguro baseado no nome do grupo."""
+    if not nome_grupo: return None
+    # Remove caracteres especiais para evitar erro de nome de arquivo
+    nome_seguro = re.sub(r'[^\w\s-]', '', nome_grupo).strip().replace(' ', '_')
+    return f"state_{nome_seguro}.json"
+
 def salvar_estado_disco():
+    grupo = st.session_state.get('grupo_atual')
+    arquivo = get_arquivo_estado(grupo)
+    
+    if not arquivo: return
+
     estado = {
         'fila_espera': st.session_state.get('fila_espera', []),
         'streak_vitorias': st.session_state.get('streak_vitorias', 0),
         'time_vencedor_anterior': st.session_state.get('time_vencedor_anterior', None),
         'jogo_atual_serializado': None,
-        'grupo_atual': st.session_state.get('grupo_atual', None),
         'todos_presentes': st.session_state.get('todos_presentes', []),
         'todos_levantadores': st.session_state.get('todos_levantadores', [])
     }
@@ -38,21 +49,21 @@ def salvar_estado_disco():
         }
         
     try:
-        with open(STATE_FILE, 'w') as f:
+        with open(arquivo, 'w') as f:
             json.dump(estado, f)
     except Exception as e:
         print(f"Erro ao salvar cache local: {e}")
 
-def carregar_estado_disco():
-    if os.path.exists(STATE_FILE):
+def carregar_estado_disco(grupo_alvo):
+    arquivo = get_arquivo_estado(grupo_alvo)
+    if arquivo and os.path.exists(arquivo):
         try:
-            with open(STATE_FILE, 'r') as f:
+            with open(arquivo, 'r') as f:
                 estado = json.load(f)
                 
             st.session_state['fila_espera'] = estado.get('fila_espera', [])
             st.session_state['streak_vitorias'] = estado.get('streak_vitorias', 0)
             st.session_state['time_vencedor_anterior'] = estado.get('time_vencedor_anterior', None)
-            st.session_state['grupo_atual'] = estado.get('grupo_atual', None)
             st.session_state['todos_presentes'] = estado.get('todos_presentes', [])
             st.session_state['todos_levantadores'] = estado.get('todos_levantadores', [])
             
@@ -69,17 +80,14 @@ def carregar_estado_disco():
 
 # --- INICIALIZAÇÃO DE ESTADO ---
 def inicializar_session_state():
-    if 'iniciado' not in st.session_state:
-        carregar_estado_disco()
-        st.session_state['iniciado'] = True
-    
     chaves_padrao = {
         'fila_espera': [],
         'streak_vitorias': 0,
         'time_vencedor_anterior': None,
         'todos_presentes': [],
         'todos_levantadores': [],
-        'grupo_atual': None
+        'grupo_atual': None,
+        'modo_substituicao': False # Nova chave para controle visual
     }
     for chave, valor in chaves_padrao.items():
         if chave not in st.session_state:
@@ -113,13 +121,9 @@ def realizar_substituicao(jogador_saindo, time_alvo_str):
         st.toast("⚠️ A fila de espera está vazia! Não há quem colocar no lugar.")
         return
 
-    # Quem entra e quem sai
     jogador_entrando = st.session_state['fila_espera'].pop(0) 
-    
-    # Atualiza a Fila (Quem sai vai pro fim)
     st.session_state['fila_espera'].append(jogador_saindo)
     
-    # Atualiza DataFrames do Jogo
     time_df = st.session_state['jogo_atual'][time_alvo_str]
     df_geral = st.session_state['cache_jogadores']
     dados_novo = df_geral[(df_geral['Nome'] == jogador_entrando) & (df_geral['Grupo'] == st.session_state['grupo_atual'])].iloc[0]
@@ -165,7 +169,6 @@ def processar_vitoria(time_venc, time_perd, nome_venc_str, grupo_selecionado, t_
     
     df_ram = st.session_state['cache_jogadores']
     
-    # Atualiza Elo
     for n in time_venc['Nome']:
         idx = df_ram.index[(df_ram['Nome'] == n) & (df_ram['Grupo'] == grupo_selecionado)]
         if not idx.empty:
@@ -182,7 +185,6 @@ def processar_vitoria(time_venc, time_perd, nome_venc_str, grupo_selecionado, t_
     conn.update(worksheet="Jogadores", data=df_ram)
     st.session_state['cache_jogadores'] = df_ram
     
-    # Atualiza Histórico
     try:
         fuso_br = pytz.timezone('America/Sao_Paulo')
         data_hora_atual = datetime.now(fuso_br).strftime("%d/%m %H:%M")
@@ -203,7 +205,6 @@ def processar_vitoria(time_venc, time_perd, nome_venc_str, grupo_selecionado, t_
     except Exception as e:
         print(f"Erro ao salvar histórico: {e}")
     
-    # Lógica de Streak
     venc_nomes = time_venc['Nome'].tolist()
     anteriores = st.session_state.get('time_vencedor_anterior', [])
     
@@ -229,6 +230,8 @@ df_geral = carregar_dados()
 with st.sidebar:
     st.header("👥 Grupos")
     grupos_opcoes = df_geral['Grupo'].unique().tolist()
+    
+    # Adiciona grupo atual à lista se não estiver lá
     if st.session_state['grupo_atual'] and st.session_state['grupo_atual'] not in grupos_opcoes and st.session_state['grupo_atual'] != "➕ Criar novo...":
         grupos_opcoes.append(st.session_state['grupo_atual'])
             
@@ -239,19 +242,29 @@ with st.sidebar:
         
     grupo_selecionado = st.selectbox("Selecionar grupo:", opcoes_finais, index=idx)
     
+    # Lógica de Troca de Grupo
     if grupo_selecionado == "➕ Criar novo...":
         with st.form("form_cria_grupo"):
             st.subheader("Novo Grupo")
             novo_nome = st.text_input("Nome")
             if st.form_submit_button("Criar") and novo_nome:
                 st.session_state['grupo_atual'] = novo_nome
+                # Limpa estado do grupo anterior
+                for k in ['jogo_atual', 'fila_espera', 'streak_vitorias', 'time_vencedor_anterior']:
+                    if k in st.session_state: del st.session_state[k]
                 salvar_estado_disco()
                 st.rerun()
         st.stop()
     else:
+        # Se mudou de grupo no selectbox
         if st.session_state['grupo_atual'] != grupo_selecionado:
             st.session_state['grupo_atual'] = grupo_selecionado
-            salvar_estado_disco()
+            # Tenta carregar estado do novo grupo
+            if not carregar_estado_disco(grupo_selecionado):
+                # Se não tem salvo, reseta variáveis de jogo
+                for k in ['jogo_atual', 'fila_espera', 'streak_vitorias', 'time_vencedor_anterior']:
+                    if k in st.session_state: del st.session_state[k]
+            st.rerun()
 
     st.divider()
 
@@ -271,13 +284,18 @@ with st.sidebar:
     col_btn1, col_btn2 = st.columns(2)
     with col_btn1:
         if st.button("🔄 Atualizar"):
+            # Recarrega do disco (para sync multi-dispositivo) e limpa cache
+            carregar_estado_disco(grupo_selecionado)
             if 'cache_jogadores' in st.session_state: del st.session_state['cache_jogadores']
             st.rerun()
     with col_btn2:
         if st.button("⚠️ Resetar"):
             for key in ['jogo_atual', 'fila_espera', 'streak_vitorias', 'time_vencedor_anterior', 'todos_presentes', 'todos_levantadores']:
                 if key in st.session_state: del st.session_state[key]
-            if os.path.exists(STATE_FILE): os.remove(STATE_FILE)
+            
+            # Remove arquivo específico deste grupo
+            arq = get_arquivo_estado(grupo_selecionado)
+            if arq and os.path.exists(arq): os.remove(arq)
             st.rerun()
 
 # --- ABAS ---
@@ -352,8 +370,6 @@ with tab2:
 with tab3:
     col_h_t, col_h_f = st.columns([1, 1])
     with col_h_t: st.markdown(f"### 📜 Histórico: {grupo_selecionado}")
-    
-    # REINSERIDO: Lógica de Filtro "Geral" vs "Último dia"
     with col_h_f:
         tipo_historico = st.radio("Visualização Histórico:", ["Geral", "Último dia"], horizontal=True, label_visibility="collapsed", key="hist_view")
 
@@ -362,7 +378,6 @@ with tab3:
         df_hf = df_hist[df_hist['Grupo'] == grupo_selecionado].copy()
         
         if not df_hf.empty:
-            # Lógica de Filtro igual ao Ranking
             if tipo_historico == "Último dia":
                 ultima_data_hist = df_hf.iloc[-1]['Data'].split(" ")[0]
                 st.caption(f"📅 Exibindo partidas do dia: **{ultima_data_hist}**")
@@ -401,73 +416,82 @@ with tab1:
         lev_final = st.session_state['todos_levantadores']
         nec = tamanho_time * 2
         
-        if len(pres_final) >= nec:
-            col_act, _ = st.columns([1, 2])
-            txt_btn = "🔄 Próxima rodada" if 'jogo_atual' in st.session_state else "🏐 Iniciar Jogo"
+        # --- REINSERIDO: AVISO DE MÍNIMO DE JOGADORES ---
+        if len(pres_final) < nec:
+            st.warning(f"⚠️ Selecione pelo menos {nec} jogadores para iniciar uma partida equilibrada.")
+        
+        # Só libera os botões se tiver gente suficiente
+        if len(pres_final) >= 2: # Permite iniciar com menos para testes, mas mantendo o warning visual acima
+            st.divider()
             
-            if col_act.button(txt_btn, type="primary"):
-                if 'fila_espera' not in st.session_state: st.session_state['fila_espera'] = []
-                
-                venc_garantidos = []
-                streak = st.session_state.get('streak_vitorias', 0)
-                
-                # 1. Rei da Quadra
-                if st.session_state['time_vencedor_anterior'] and streak < limite_vitorias:
-                    venc_garantidos = [p for p in st.session_state['time_vencedor_anterior'] if p in pres_final]
-                    if len(venc_garantidos) != tamanho_time:
-                        venc_garantidos = []
+            col_act, col_subs = st.columns([2, 1])
+            
+            with col_act:
+                txt_btn = "🔄 Próxima rodada" if 'jogo_atual' in st.session_state else "🏐 Iniciar Jogo"
+                # Usa callback para evitar aninhamento complexo
+                if st.button(txt_btn, type="primary"):
+                    if 'fila_espera' not in st.session_state: st.session_state['fila_espera'] = []
+                    
+                    venc_garantidos = []
+                    streak = st.session_state.get('streak_vitorias', 0)
+                    
+                    # 1. Rei da Quadra
+                    if st.session_state['time_vencedor_anterior'] and streak < limite_vitorias:
+                        venc_garantidos = [p for p in st.session_state['time_vencedor_anterior'] if p in pres_final]
+                        if len(venc_garantidos) != tamanho_time:
+                            venc_garantidos = []
+                            st.session_state['streak_vitorias'] = 0
+                            st.session_state['time_vencedor_anterior'] = None
+                    else:
                         st.session_state['streak_vitorias'] = 0
                         st.session_state['time_vencedor_anterior'] = None
-                else:
-                    st.session_state['streak_vitorias'] = 0
-                    st.session_state['time_vencedor_anterior'] = None
 
-                # 2. Definição de Vagas
-                vagas = nec - len(venc_garantidos)
-                candidatos = [p for p in pres_final if p not in venc_garantidos]
-                
-                # Garante que a fila só tem gente que está presente e não é vencedor garantido
-                fila_limpa = [p for p in st.session_state['fila_espera'] if p in candidatos]
-                
-                novos_jogar = []
-                
-                # Pega da fila primeiro
-                novos_jogar.extend(fila_limpa[:vagas])
-                
-                # Se ainda faltar, sorteia do resto
-                faltam = vagas - len(novos_jogar)
-                
-                # Quem não jogou e não estava na fila
-                resto_candidatos = [p for p in candidatos if p not in novos_jogar and p not in fila_limpa]
-                random.shuffle(resto_candidatos)
-                
-                if faltam > 0:
-                    novos_jogar.extend(resto_candidatos[:faltam])
-                    sobra_para_fila = resto_candidatos[faltam:]
-                else:
-                    sobra_para_fila = resto_candidatos
+                    # 2. Definição de Vagas e Sorteio
+                    vagas = nec - len(venc_garantidos)
+                    candidatos = [p for p in pres_final if p not in venc_garantidos]
+                    fila_limpa = [p for p in st.session_state['fila_espera'] if p in candidatos]
+                    
+                    novos_jogar = []
+                    
+                    # Entra quem está na fila
+                    novos_jogar.extend(fila_limpa[:vagas])
+                    
+                    # Completa com o resto sorteado
+                    faltam = vagas - len(novos_jogar)
+                    resto_candidatos = [p for p in candidatos if p not in novos_jogar and p not in fila_limpa]
+                    random.shuffle(resto_candidatos)
+                    
+                    if faltam > 0:
+                        novos_jogar.extend(resto_candidatos[:faltam])
+                        sobra_para_fila = resto_candidatos[faltam:]
+                    else:
+                        sobra_para_fila = resto_candidatos
 
-                # --- CORREÇÃO CRÍTICA DA FILA ---
-                # A nova fila deve ser: 
-                # (Quem estava na fila e não entrou) + (Quem sobrou do sorteio atual misturado)
-                quem_estava_fila_e_sobrou = fila_limpa[vagas:] if len(fila_limpa) > vagas else []
-                
-                random.shuffle(sobra_para_fila) # Mistura quem entra novo na fila
-                
-                st.session_state['fila_espera'] = quem_estava_fila_e_sobrou + sobra_para_fila
-                
-                # 3. Montar Times
-                pool = venc_garantidos + novos_jogar
-                if st.session_state['time_vencedor_anterior'] and streak > 0:
-                    t_a = df_jogadores[df_jogadores['Nome'].isin(venc_garantidos)]
-                    t_b = df_jogadores[df_jogadores['Nome'].isin(novos_jogar)]
+                    # Fila = Quem sobrou da fila antiga + Quem sobrou do sorteio (Misturados)
+                    quem_ficou_da_fila = fila_limpa[vagas:] if len(fila_limpa) > vagas else []
+                    random.shuffle(sobra_para_fila) 
+                    st.session_state['fila_espera'] = quem_ficou_da_fila + sobra_para_fila
+                    
+                    # 3. Montar Times
+                    pool = venc_garantidos + novos_jogar
+                    if st.session_state['time_vencedor_anterior'] and streak > 0:
+                        t_a = df_jogadores[df_jogadores['Nome'].isin(venc_garantidos)]
+                        t_b = df_jogadores[df_jogadores['Nome'].isin(novos_jogar)]
+                    else:
+                        df_p = df_jogadores[df_jogadores['Nome'].isin(pool)]
+                        t_a, t_b = distribuir_times_equilibrados(df_p, lev_final, tamanho_time)
+                    
+                    st.session_state['jogo_atual'] = {'A': t_a, 'B': t_b}
+                    salvar_estado_disco()
+                    st.rerun()
+
+            # --- NOVO: MODO SUBSTITUIÇÃO ---
+            with col_subs:
+                # Toggle para mostrar/esconder botões
+                if st.toggle("Modo Substituição", value=st.session_state.get('modo_substituicao', False)):
+                    st.session_state['modo_substituicao'] = True
                 else:
-                    df_p = df_jogadores[df_jogadores['Nome'].isin(pool)]
-                    t_a, t_b = distribuir_times_equilibrados(df_p, lev_final, tamanho_time)
-                
-                st.session_state['jogo_atual'] = {'A': t_a, 'B': t_b}
-                salvar_estado_disco()
-                st.rerun()
+                    st.session_state['modo_substituicao'] = False
 
             # --- EXIBIÇÃO DO JOGO ---
             if 'jogo_atual' in st.session_state:
@@ -480,7 +504,6 @@ with tab1:
                 
                 def render_team(team_df, team_name, container):
                     with container:
-                        # REINSERIDO: Indicador Visual de Streak
                         is_streak = streak > 0 and \
                                     st.session_state.get('time_vencedor_anterior') and \
                                     set(team_df['Nome']) == set(st.session_state['time_vencedor_anterior'])
@@ -488,15 +511,22 @@ with tab1:
                         titulo = f"🛡️ Time {team_name}" if team_name == 'A' else f"⚔️ Time {team_name}"
                         st.markdown(f"### {titulo} ({team_df['Elo'].mean():.0f})")
                         
-                        if is_streak:
-                            st.caption(f"👑 Reis da Quadra ({streak}/{limite_vitorias} vitórias)")
+                        if is_streak: st.caption(f"👑 Reis da Quadra ({streak}/{limite_vitorias} vitórias)")
                         
                         for _, row in team_df.iterrows():
-                            c_nome, c_btn = st.columns([4, 1])
+                            # Se modo substituição ativo, divide colunas, senão mostra só nome
+                            if st.session_state['modo_substituicao']:
+                                c_nome, c_btn = st.columns([4, 1])
+                            else:
+                                c_nome = st.container()
+                                c_btn = None
+                                
                             icon = "🤲" if row['Nome'] in lev_final else "👤"
                             c_nome.write(f"**{icon} {row['Nome']}** ({row['Elo']:.0f})")
-                            if c_btn.button("🔄", key=f"sub_{team_name}_{row['Nome']}", help="Substituir jogador"):
-                                realizar_substituicao(row['Nome'], team_name)
+                            
+                            if c_btn:
+                                if c_btn.button("🔄", key=f"sub_{team_name}_{row['Nome']}", help="Substituir jogador"):
+                                    realizar_substituicao(row['Nome'], team_name)
                                 
                         st.markdown("---")
                         if st.button(f"VITÓRIA TIME {team_name} 🏆", use_container_width=True, key=f"win_{team_name}"):
@@ -507,9 +537,8 @@ with tab1:
                 with cM: st.markdown("<br><br><h2 style='text-align: center;'>VS</h2>", unsafe_allow_html=True)
                 render_team(t_b, 'B', cB)
 
-# --- ATUALIZAÇÃO FINAL DA FILA (Sempre visível) ---
+# --- ATUALIZAÇÃO FINAL DA FILA ---
 if 'fila_espera' in st.session_state and st.session_state['fila_espera']:
-    # Filtra visualmente apenas quem está presente para não confundir
     fila_visivel = [p for p in st.session_state['fila_espera'] if p in st.session_state.get('todos_presentes', [])]
     if fila_visivel:
         txt = "\n".join([f"**{i+1}º** {n}" for i, n in enumerate(fila_visivel)])
