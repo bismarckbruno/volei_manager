@@ -331,7 +331,7 @@ with tab2:
 
 # --- ABA 3: HISTÓRICO (MODIFICADA) --- 
 with tab3:
-    st.markdown(f"### 📜 Histórico ({grupo_selecionado})")
+    st.markdown(f"### 📜 Histórico: {grupo_selecionado}")
     try:
         df_hist = conn.read(worksheet="Historico", ttl=0).dropna(how="all")
         if 'Grupo' not in df_hist.columns:
@@ -530,5 +530,6 @@ if 'fila_espera' in st.session_state and st.session_state['fila_espera']:
     placeholder_fila.markdown(texto_fila)
 else:
     placeholder_fila.caption("Fila vazia.")
+
 
 
