@@ -112,7 +112,7 @@ def processar_vitoria(time_venc, time_perd, nome_venc_str, grupo_selecionado, t_
     # Salva no Google Sheets
     conn.update(worksheet="Jogadores", data=df_ram)
     st.session_state['cache_jogadores'] = df_ram
-
+    
     # Atualiza Histórico
     try:
         fuso_br = pytz.timezone('America/Sao_Paulo')
@@ -256,27 +256,34 @@ with tab2:
                 df_h_grupo = df_h[df_h['Grupo'] == grupo_selecionado]
                 
                 if not df_h_grupo.empty:
-                    # Pega a data da última partida registrada (assumindo ordem de inserção)
-                    ultima_data_completa = df_h_grupo.iloc[-1]['Data'] 
-                    # Extrai apenas o dia/mês (ex: "16/01") para pegar todas partidas do dia
-                    dia_referencia = ultima_data_completa.split(" ")[0] 
-                    
-                    st.caption(f"📅 Exibindo jogadores presentes em: **{dia_referencia}**")
-                    
-                    # Filtra linhas do histórico que contém essa data
-                    jogos_do_dia = df_h_grupo[df_h_grupo['Data'].str.contains(dia_referencia, na=False)]
-                    
-                    # Extrai todos os nomes dos times A e B desses jogos
-                    nomes_presentes = set()
-                    for _, row in jogos_do_dia.iterrows():
-                        nomes_presentes.update(row['Time A'].split(", "))
-                        nomes_presentes.update(row['Time B'].split(", "))
-                    
-                    # Filtra o DataFrame principal de jogadores
-                    df_visual = df_visual[df_visual['Nome'].isin(nomes_presentes)]
-                    
-                    if df_visual.empty:
-                        st.warning("Nenhum jogador encontrado para a data filtrada.")
+                    # --- CORREÇÃO: DETECÇÃO AUTOMÁTICA DO NOME DA COLUNA ---
+                    cols = df_h_grupo.columns
+                    col_time_a = next((c for c in ['Time_A', 'TimeA', 'Time A'] if c in cols), None)
+                    col_time_b = next((c for c in ['Time_B', 'TimeB', 'Time B'] if c in cols), None)
+
+                    if col_time_a and col_time_b:
+                        # Pega a data da última partida registrada
+                        ultima_data_completa = df_h_grupo.iloc[-1]['Data'] 
+                        dia_referencia = ultima_data_completa.split(" ")[0] 
+                        
+                        st.caption(f"📅 Exibindo jogadores presentes em: **{dia_referencia}**")
+                        
+                        # Filtra linhas do histórico que contém essa data
+                        jogos_do_dia = df_h_grupo[df_h_grupo['Data'].str.contains(dia_referencia, na=False)]
+                        
+                        # Extrai todos os nomes dos times A e B desses jogos
+                        nomes_presentes = set()
+                        for _, row in jogos_do_dia.iterrows():
+                            nomes_presentes.update(str(row[col_time_a]).split(", "))
+                            nomes_presentes.update(str(row[col_time_b]).split(", "))
+                        
+                        # Filtra o DataFrame principal de jogadores
+                        df_visual = df_visual[df_visual['Nome'].isin(nomes_presentes)]
+                        
+                        if df_visual.empty:
+                            st.warning("Nenhum jogador encontrado para a data filtrada.")
+                    else:
+                        st.warning("Colunas de times não encontradas no histórico.")
                 else:
                     st.warning("Sem histórico para filtrar recentes. Mostrando geral.")
             except Exception as e:
@@ -322,7 +329,7 @@ with tab2:
                 time.sleep(1)
                 st.rerun()
 
-# --- ABA 3: HISTÓRICO --- 
+# --- ABA 3: HISTÓRICO (MODIFICADA) --- 
 with tab3:
     st.markdown(f"### 📜 Histórico ({grupo_selecionado})")
     try:
@@ -335,17 +342,28 @@ with tab3:
         if df_hist_filtrado.empty:
              st.info("Nenhuma partida encontrada para este grupo.")
         else:
-            # --- LÓGICA DE CORES ---
-            def destacar_vencedor(valor):
-                if valor == 'Time A':
-                    return 'background-color: #dbeafe; color: #1e3a8a; font-weight: bold' # Azul Claro
-                elif valor == 'Time B':
-                    return 'background-color: #ffedd5; color: #9a3412; font-weight: bold' # Laranja Claro
-                return ''
+            # --- NOVA LÓGICA DE CORES: Destacar apenas a célula do time vencedor ---
+            def destacar_time_vencedor(row):
+                # Cria uma lista de estilos vazios para todas as colunas
+                styles = pd.Series('', index=row.index)
+                
+                # Cores
+                cor_time_a = 'background-color: #dbeafe; color: #1e3a8a; font-weight: bold' # Azul Claro
+                cor_time_b = 'background-color: #ffedd5; color: #9a3412; font-weight: bold' # Laranja Claro
+                
+                # Verifica quem venceu e pinta a coluna correspondente
+                vencedor = row['Vencedor']
+                
+                if vencedor == 'Time A' and 'Time A' in row.index:
+                    styles['Time A'] = cor_time_a
+                elif vencedor == 'Time B' and 'Time B' in row.index:
+                    styles['Time B'] = cor_time_b
+                    
+                return styles
 
-            # Aplica o estilo apenas na coluna 'Vencedor'
+            # Usa apply com axis=1 para analisar linha por linha
             st.dataframe(
-                df_hist_filtrado.iloc[::-1].style.map(destacar_vencedor, subset=['Vencedor']),
+                df_hist_filtrado.iloc[::-1].style.apply(destacar_time_vencedor, axis=1),
                 use_container_width=True,
                 hide_index=True
             )
@@ -511,17 +529,4 @@ if 'fila_espera' in st.session_state and st.session_state['fila_espera']:
         texto_fila += f"**{i+1}º** {nome}\n\n"
     placeholder_fila.markdown(texto_fila)
 else:
-
     placeholder_fila.caption("Fila vazia.")
-
-
-
-
-
-
-
-
-
-
-
-
