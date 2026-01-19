@@ -170,56 +170,74 @@ def carregar_dados():
 
 def exibir_tabela_plotly(df, colunas_mostrar, destacar_vencedor=False):
     """
-    Gera tabela Plotly com:
-    1. Largura das colunas baseada no conteúdo (Autofit).
-    2. Contraste de texto corrigido (Preto em fundo claro, Branco em fundo escuro).
+    Gera tabela Plotly com cálculo estrito de largura e cores.
     """
     if df.empty: return
     
     fill_colors = []
     font_colors = []
     
-    # --- CÁLCULO DA LARGURA DAS COLUNAS (AUTOFIT) ---
+    # --- CÁLCULO AGRESSIVO DE LARGURA (Auto-Fit) ---
     larguras = []
     for col in colunas_mostrar:
-        # Pega o maior comprimento de string na coluna (ou o tamanho do cabeçalho)
-        max_len = max(
-            df[col].astype(str).map(len).max() if not df[col].empty else 0,
-            len(col)
-        )
-        # Adiciona um "respiro" para não ficar colado
-        larguras.append(max_len + 2)
+        # Pega o tamanho do cabeçalho
+        len_header = len(str(col))
+        
+        # Pega o tamanho do maior item da coluna
+        if not df[col].empty:
+            len_content = df[col].astype(str).map(len).max()
+        else:
+            len_content = 0
+            
+        # O tamanho final é o maior entre cabeçalho e conteúdo
+        final_len = max(len_header, len_content)
+        
+        # Ajuste fino: Colunas muito curtas (ex: Elo, Pos) precisam de um pouco mais de "ar"
+        # Colunas longas (Nomes) precisam de menos "ar" proporcional
+        if final_len < 5:
+            width_val = final_len * 1.5
+        else:
+            width_val = final_len * 0.9 # Comprime levemente textos longos
+            
+        larguras.append(width_val)
 
-    # --- LÓGICA DE CORES E CONTRASTE ---
+    # --- LÓGICA DE CORES E CONTRASTE ESTRITA ---
     for col in colunas_mostrar:
         col_fill = []
         col_font = []
         for _, row in df.iterrows():
-            # Padrão Dark Mode
-            c = "#262730" 
-            t = "white"   
+            # Default: Fundo Escuro (#262730) -> Texto Branco
+            bg_color = "#262730"
+            txt_color = "white"   
             
-            # 1. Checagem de Patente (Prioridade Baixa)
+            # 1. Patentes (Prioridade Baixa)
             if 'Patente' in row:
-                if "Iniciante" in row['Patente']: c, t = "#f1c40f", "black"
-                elif "Amador" in row['Patente']: c, t = "#d4ac0d", "black"
-                elif "Intermediário" in row['Patente']: c, t = "#1abc9c", "black"
-                elif "Avançado" in row['Patente']: c, t = "#3498db", "black"
-                elif "Lenda" in row['Patente']: c, t = "#2c3e50", "white" # Lenda é escuro, texto branco
+                pat = str(row['Patente'])
+                if "Iniciante" in pat: 
+                    bg_color = "#f1c40f"; txt_color = "black"
+                elif "Amador" in pat: 
+                    bg_color = "#d4ac0d"; txt_color = "black"
+                elif "Intermediário" in pat: 
+                    bg_color = "#1abc9c"; txt_color = "black"
+                elif "Avançado" in pat: 
+                    bg_color = "#3498db"; txt_color = "black"
+                elif "Lenda" in pat: 
+                    bg_color = "#2c3e50"; txt_color = "white"
             
-            # 2. Checagem de Vencedor (Prioridade Alta - Sobrescreve)
+            # 2. Vencedor (Prioridade Alta - Sobrescreve Patente)
             if destacar_vencedor:
                 venc = str(row.get('Vencedor', ''))
-                # Se for célula vencedora, FUNDO CLARO -> TEXTO PRETO
+                # Time A Venceu -> Verde Claro -> Texto PRETO
                 if col == "Time A" and ("Time A" in venc or "Time_A" in venc):
-                    c = "#d1e7dd"
-                    t = "black" 
+                    bg_color = "#d1e7dd"
+                    txt_color = "black" 
+                # Time B Venceu -> Amarelo Claro -> Texto PRETO
                 elif col == "Time B" and ("Time B" in venc or "Time_B" in venc):
-                    c = "#fff3cd"
-                    t = "black"
+                    bg_color = "#fff3cd"
+                    txt_color = "black"
 
-            col_fill.append(c)
-            col_font.append(t)
+            col_fill.append(bg_color)
+            col_font.append(txt_color)
         
         fill_colors.append(col_fill)
         font_colors.append(col_font)
@@ -228,21 +246,27 @@ def exibir_tabela_plotly(df, colunas_mostrar, destacar_vencedor=False):
         columnwidth=larguras, # Aplica a largura calculada
         header=dict(
             values=list(colunas_mostrar),
-            fill_color='#0e1117',
-            font=dict(color='white', size=12),
+            fill_color='#0e1117', # Cabeçalho Preto
+            font=dict(color='white', size=12, check_contrast=False), # Texto Branco forçado
             align='left'
         ),
         cells=dict(
             values=[df[k].tolist() for k in colunas_mostrar],
             fill_color=fill_colors,
-            font=dict(color=font_colors, size=11),
+            font=dict(color=font_colors, size=11), # Cores calculadas acima
             align='left',
-            height=30
+            height=25 # Altura reduzida para compactar verticalmente também
         )
     )])
     
-    # Ajuste fino de layout para remover margens
-    fig.update_layout(margin=dict(l=0, r=0, t=0, b=0), height=400, paper_bgcolor="#0e1117")
+    # Remove margens para a tabela ocupar tudo e ficar compacta na foto
+    fig.update_layout(
+        margin=dict(l=0, r=0, t=0, b=0), 
+        height=400, # Altura fixa do container
+        paper_bgcolor="#0e1117", # Fundo preto para combinar com Dark Mode
+        autosize=True
+    )
+    
     st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': True, 'displaylogo': False})
 
 
@@ -564,6 +588,7 @@ with tab1:
         limite_atual = st.session_state['config_limite_vitorias']
         nec = tamanho_atual * 2
         
+        # --- BLOQUEIO DE JOGADORES INSUFICIENTES ---
         if len(pres_final) < nec:
             st.error(f"❌ Mínimo de {nec} jogadores necessários para partidas de {tamanho_atual}x{tamanho_atual}. Você selecionou apenas {len(pres_final)}. Selecione mais {nec - len(pres_final)}.")
         else:
