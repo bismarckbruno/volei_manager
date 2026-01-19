@@ -23,7 +23,7 @@ st.title("🏐 Vôlei Manager")
 
 # --- CONSTANTES ---
 K_FACTOR = 32
-ARQUIVO_PREF_GLOBAL = "user_pref.json" # Arquivo para salvar o último grupo selecionado
+ARQUIVO_PREF_GLOBAL = "user_pref.json" 
 
 # --- CONEXÃO DEFENSIVA ---
 try:
@@ -40,7 +40,6 @@ def get_arquivo_estado(nome_grupo):
     return f"state_{nome_seguro}.json"
 
 def salvar_estado_disco():
-    """Salva o estado atual do grupo que está na memória."""
     grupo = st.session_state.get('grupo_atual')
     if not grupo or grupo == "➕ Criar novo...": return
 
@@ -70,7 +69,6 @@ def salvar_estado_disco():
         print(f"Erro ao salvar cache local: {e}")
 
 def limpar_estado_memoria():
-    """Reseta a memória RAM para evitar vazamento de dados entre grupos."""
     keys_to_reset = [
         'fila_espera', 'streak_vitorias', 'time_vencedor_anterior', 
         'todos_presentes', 'todos_levantadores', 'jogo_atual'
@@ -78,13 +76,10 @@ def limpar_estado_memoria():
     for k in keys_to_reset:
         if k in st.session_state:
             del st.session_state[k]
-    
-    # Restaura configurações padrão
     st.session_state['config_tamanho_time'] = 6
     st.session_state['config_limite_vitorias'] = 3
 
 def carregar_estado_disco(grupo_alvo):
-    """Tenta carregar o JSON do grupo alvo. Se falhar, retorna False."""
     arquivo = get_arquivo_estado(grupo_alvo)
     if arquivo and os.path.exists(arquivo):
         try:
@@ -96,7 +91,6 @@ def carregar_estado_disco(grupo_alvo):
             st.session_state['time_vencedor_anterior'] = estado.get('time_vencedor_anterior', None)
             st.session_state['todos_presentes'] = estado.get('todos_presentes', [])
             st.session_state['todos_levantadores'] = estado.get('todos_levantadores', [])
-            
             st.session_state['config_tamanho_time'] = int(estado.get('config_tamanho_time', 6))
             st.session_state['config_limite_vitorias'] = int(estado.get('config_limite_vitorias', 3))
             
@@ -107,7 +101,6 @@ def carregar_estado_disco(grupo_alvo):
                 }
             else:
                 if 'jogo_atual' in st.session_state: del st.session_state['jogo_atual']
-                
             return True
         except Exception as e:
             st.warning(f"Não foi possível restaurar sessão anterior: {e}")
@@ -130,14 +123,12 @@ def obter_grupo_inicial(grupos_disponiveis):
                 ultimo = dados.get("ultimo_grupo")
                 if ultimo in grupos_disponiveis: return ultimo
         except: pass
-    
     try:
         df_h = conn.read(worksheet="Historico", ttl=60)
         if not df_h.empty:
             ultimo_ativo = df_h.iloc[-1]['Grupo']
             if ultimo_ativo in grupos_disponiveis: return ultimo_ativo
     except: pass
-
     if grupos_disponiveis: return grupos_disponiveis[0]
     return None
 
@@ -177,48 +168,80 @@ def carregar_dados():
         st.error(f"Erro ao ler a aba 'Jogadores': {e}")
         st.stop()
 
-def exibir_tabela_plotly(df, colunas_mostrar, destacar_vencedor=False, tamanhos_colunas=None):
+def exibir_tabela_plotly(df, colunas_mostrar, destacar_vencedor=False):
+    """
+    Gera tabela Plotly com:
+    1. Largura das colunas baseada no conteúdo (Autofit).
+    2. Contraste de texto corrigido (Preto em fundo claro, Branco em fundo escuro).
+    """
     if df.empty: return
     
     fill_colors = []
     font_colors = []
     
+    # --- CÁLCULO DA LARGURA DAS COLUNAS (AUTOFIT) ---
+    larguras = []
+    for col in colunas_mostrar:
+        # Pega o maior comprimento de string na coluna (ou o tamanho do cabeçalho)
+        max_len = max(
+            df[col].astype(str).map(len).max() if not df[col].empty else 0,
+            len(col)
+        )
+        # Adiciona um "respiro" para não ficar colado
+        larguras.append(max_len + 2)
+
+    # --- LÓGICA DE CORES E CONTRASTE ---
     for col in colunas_mostrar:
         col_fill = []
         col_font = []
         for _, row in df.iterrows():
+            # Padrão Dark Mode
             c = "#262730" 
             t = "white"   
+            
+            # 1. Checagem de Patente (Prioridade Baixa)
             if 'Patente' in row:
                 if "Iniciante" in row['Patente']: c, t = "#f1c40f", "black"
                 elif "Amador" in row['Patente']: c, t = "#d4ac0d", "black"
                 elif "Intermediário" in row['Patente']: c, t = "#1abc9c", "black"
                 elif "Avançado" in row['Patente']: c, t = "#3498db", "black"
-                elif "Lenda" in row['Patente']: c, t = "#2c3e50", "white"
+                elif "Lenda" in row['Patente']: c, t = "#2c3e50", "white" # Lenda é escuro, texto branco
             
+            # 2. Checagem de Vencedor (Prioridade Alta - Sobrescreve)
             if destacar_vencedor:
                 venc = str(row.get('Vencedor', ''))
+                # Se for célula vencedora, FUNDO CLARO -> TEXTO PRETO
                 if col == "Time A" and ("Time A" in venc or "Time_A" in venc):
-                    c = "#d1e7dd"; t = "black"
+                    c = "#d1e7dd"
+                    t = "black" 
                 elif col == "Time B" and ("Time B" in venc or "Time_B" in venc):
-                    c = "#fff3cd"; t = "black"
+                    c = "#fff3cd"
+                    t = "black"
 
             col_fill.append(c)
             col_font.append(t)
+        
         fill_colors.append(col_fill)
         font_colors.append(col_font)
 
-    # Configuração da Tabela com larguras personalizadas
-    tabela_args = dict(
-        header=dict(values=list(colunas_mostrar), fill_color='#0e1117', font=dict(color='white', size=12), align='left'),
-        cells=dict(values=[df[k].tolist() for k in colunas_mostrar], fill_color=fill_colors, font=dict(color=font_colors, size=11), align='left', height=30)
-    )
+    fig = go.Figure(data=[go.Table(
+        columnwidth=larguras, # Aplica a largura calculada
+        header=dict(
+            values=list(colunas_mostrar),
+            fill_color='#0e1117',
+            font=dict(color='white', size=12),
+            align='left'
+        ),
+        cells=dict(
+            values=[df[k].tolist() for k in colunas_mostrar],
+            fill_color=fill_colors,
+            font=dict(color=font_colors, size=11),
+            align='left',
+            height=30
+        )
+    )])
     
-    # Se foram passados tamanhos, adiciona ao objeto
-    if tamanhos_colunas:
-        tabela_args['columnwidth'] = tamanhos_colunas
-
-    fig = go.Figure(data=[go.Table(**tabela_args)])
+    # Ajuste fino de layout para remover margens
     fig.update_layout(margin=dict(l=0, r=0, t=0, b=0), height=400, paper_bgcolor="#0e1117")
     st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': True, 'displaylogo': False})
 
@@ -477,9 +500,7 @@ with tab2:
             df_visual.insert(0, 'Pos.', [f"{i+1}º" for i in range(len(df_visual))])
 
             cols_ranking = ["Pos.", "Nome", "Patente", "Elo", "Partidas", "Vitorias"]
-            # AQUI: PESOS DO RANKING
-            # Pos (estreito), Nome (largo), Patente (médio), Resto (estreito)
-            exibir_tabela_plotly(df_visual[cols_ranking], cols_ranking, destacar_vencedor=False, tamanhos_colunas=[1, 4, 3, 1.2, 1, 1])
+            exibir_tabela_plotly(df_visual[cols_ranking], cols_ranking, destacar_vencedor=False)
             st.caption("💡 Clique no ícone de câmera no canto superior direito da tabela para baixar como imagem.")
 
     with st.expander("➕ Cadastrar Novo Jogador"):
@@ -514,9 +535,7 @@ with tab3:
             
             df_hf = df_hf.iloc[::-1]
             cols_show = ["Data", "Time A", "Time B", "Vencedor", "Pontos_Elo"]
-            # AQUI: PESOS DO HISTÓRICO
-            # Data (pequeno), Times (largo), Vencedor (médio), Pontos (pequeno)
-            exibir_tabela_plotly(df_hf[cols_show], cols_show, destacar_vencedor=True, tamanhos_colunas=[1.2, 4, 4, 3, 1.2])
+            exibir_tabela_plotly(df_hf[cols_show], cols_show, destacar_vencedor=True)
         else: st.info("Sem histórico.")
     except Exception as e: st.warning(f"Aguardando dados... {e}")
 
@@ -545,7 +564,6 @@ with tab1:
         limite_atual = st.session_state['config_limite_vitorias']
         nec = tamanho_atual * 2
         
-        # --- BLOQUEIO DE JOGADORES INSUFICIENTES ---
         if len(pres_final) < nec:
             st.error(f"❌ Mínimo de {nec} jogadores necessários para partidas de {tamanho_atual}x{tamanho_atual}. Você selecionou apenas {len(pres_final)}. Selecione mais {nec - len(pres_final)}.")
         else:
