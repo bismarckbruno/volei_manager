@@ -1,5 +1,4 @@
 import streamlit as st
-from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 import datetime
 import time
@@ -9,12 +8,13 @@ import json
 import os
 import re
 
-# Tenta importar Plotly com tratamento de erro amigável
+# --- TENTATIVA DE IMPORTAÇÃO DE BIBLIOTECAS EXTERNAS ---
 try:
+    from streamlit_gsheets import GSheetsConnection
     import plotly.graph_objects as go
-except ImportError:
-    st.error("❌ A biblioteca 'plotly' não foi encontrada.")
-    st.info("Certifique-se de que 'plotly' está listado no seu arquivo requirements.txt")
+except ImportError as e:
+    st.error(f"❌ Erro Crítico de Instalação: {e}")
+    st.info("Verifique se o arquivo 'requirements.txt' contém: st-gsheets-connection e plotly")
     st.stop()
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
@@ -24,27 +24,23 @@ st.title("🏐 Vôlei Manager")
 # --- CONSTANTES ---
 K_FACTOR = 32
 
-# --- CONEXÃO ---
-# Verifica se as secrets existem antes de tentar conectar
-if "gsheets" not in st.secrets.get("connections", {}):
-    st.warning("⚠️ Configuração de conexão não encontrada.")
-    st.info("Verifique se você configurou o `.streamlit/secrets.toml` (local) ou as Secrets no painel do Streamlit Cloud.")
-    # Não paramos o app aqui para permitir depuração, mas a conexão vai falhar abaixo
-
-conn = st.connection("gsheets", type=GSheetsConnection)
+# --- CONEXÃO DEFENSIVA ---
+try:
+    conn = st.connection("gsheets", type=GSheetsConnection)
+except Exception as e:
+    st.error("🚨 ERRO DE CONEXÃO COM O GOOGLE SHEETS")
+    st.markdown(f"**Detalhe do erro:** `{e}`")
+    st.stop()
 
 # --- GERENCIAMENTO DE ARQUIVOS DE ESTADO (PERSISTÊNCIA) ---
 def get_arquivo_estado(nome_grupo):
-    """Gera um nome de arquivo seguro baseado no nome do grupo."""
     if not nome_grupo: return None
     nome_seguro = re.sub(r'[^\w\s-]', '', nome_grupo).strip().replace(' ', '_')
     return f"state_{nome_seguro}.json"
 
 def salvar_estado_disco():
-    """Salva todas as variáveis críticas, incluindo configurações."""
     grupo = st.session_state.get('grupo_atual')
     arquivo = get_arquivo_estado(grupo)
-    
     if not arquivo: return
 
     estado = {
@@ -83,7 +79,7 @@ def carregar_estado_disco(grupo_alvo):
             st.session_state['todos_presentes'] = estado.get('todos_presentes', [])
             st.session_state['todos_levantadores'] = estado.get('todos_levantadores', [])
             
-            # Restaura configurações convertendo para int para evitar erro de índice
+            # Converte para int para garantir compatibilidade
             st.session_state['config_tamanho_time'] = int(estado.get('config_tamanho_time', 6))
             st.session_state['config_limite_vitorias'] = int(estado.get('config_limite_vitorias', 3))
             
@@ -121,54 +117,73 @@ inicializar_session_state()
 def carregar_dados():
     if 'cache_jogadores' in st.session_state:
         return st.session_state['cache_jogadores']
-    
     try:
         df = conn.read(worksheet="Jogadores", ttl=60) 
         df = df.dropna(how="all")
-        
         cols_num = ['Elo', 'Partidas', 'Vitorias']
         for c in cols_num:
             if c in df.columns:
                 df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0 if c != 'Elo' else 1200)
-            
         st.session_state['cache_jogadores'] = df
         return df
     except Exception as e:
-        st.error("Erro ao conectar com Google Sheets.")
-        st.markdown(f"**Detalhe do erro:** `{e}`")
+        st.error(f"Erro ao ler a aba 'Jogadores': {e}")
         st.stop()
 
-def exibir_tabela_plotly(df, colunas_mostrar):
-    """Gera uma tabela Plotly bonita que pode ser baixada como imagem."""
+def exibir_tabela_plotly(df, colunas_mostrar, destacar_vencedor=False):
+    """Gera uma tabela Plotly com formatação condicional."""
     if df.empty: return
     
-    # Prepara cores baseadas na patente (se existir)
-    cores_fundo = []
+    # Matrizes para armazenar cores de CADA célula (Coluna x Linha)
+    fill_colors = []
     font_colors = []
     
-    for _, row in df.iterrows():
-        if 'Patente' in row:
-            if "Iniciante" in row['Patente']: c, t = "#f1c40f", "black"
-            elif "Amador" in row['Patente']: c, t = "#d4ac0d", "black"
-            elif "Intermediário" in row['Patente']: c, t = "#1abc9c", "black"
-            elif "Avançado" in row['Patente']: c, t = "#3498db", "black"
-            else: c, t = "#2c3e50", "white"
-        else:
-            c, t = "white", "black"
-        cores_fundo.append(c)
-        font_colors.append(t)
+    # Itera sobre as colunas para construir a lista de cores coluna por coluna
+    for col in colunas_mostrar:
+        col_fill = []
+        col_font = []
+        
+        for _, row in df.iterrows():
+            c = "white" # Cor padrão
+            t = "black" # Texto padrão
+            
+            # Lógica 1: Cores por Patente (Ranking)
+            if 'Patente' in row:
+                if "Iniciante" in row['Patente']: c, t = "#f1c40f", "black"
+                elif "Amador" in row['Patente']: c, t = "#d4ac0d", "black"
+                elif "Intermediário" in row['Patente']: c, t = "#1abc9c", "black"
+                elif "Avançado" in row['Patente']: c, t = "#3498db", "black"
+                elif "Lenda" in row['Patente']: c, t = "#2c3e50", "white"
+            
+            # Lógica 2: Destaque de Vencedor (Histórico) - Sobrescreve Patente se necessário
+            if destacar_vencedor:
+                venc = str(row.get('Vencedor', ''))
+                # Se a coluna atual é Time A e o vencedor foi Time A
+                if col == "Time A" and ("Time A" in venc or "Time_A" in venc):
+                    c = "#d1e7dd" # Verde Claro
+                    t = "black"
+                # Se a coluna atual é Time B e o vencedor foi Time B
+                elif col == "Time B" and ("Time B" in venc or "Time_B" in venc):
+                    c = "#fff3cd" # Amarelo/Laranja Claro
+                    t = "black"
+
+            col_fill.append(c)
+            col_font.append(t)
+        
+        fill_colors.append(col_fill)
+        font_colors.append(col_font)
 
     fig = go.Figure(data=[go.Table(
         header=dict(
-            values=list(df.columns),
+            values=list(colunas_mostrar),
             fill_color='#444',
             font=dict(color='white', size=12),
             align='left'
         ),
         cells=dict(
-            values=[df[k].tolist() for k in df.columns],
-            fill_color=[cores_fundo] * len(df.columns) if 'Patente' in df.columns else 'white',
-            font=dict(color=[font_colors] * len(df.columns) if 'Patente' in df.columns else 'black', size=11),
+            values=[df[k].tolist() for k in colunas_mostrar],
+            fill_color=fill_colors, # Matriz de cores corrigida
+            font=dict(color=font_colors, size=11),
             align='left',
             height=30
         )
@@ -190,17 +205,14 @@ def realizar_substituicao(jogador_saindo, time_alvo_str):
     time_df = st.session_state['jogo_atual'][time_alvo_str]
     df_geral = st.session_state['cache_jogadores']
     
-    # Busca dados do novo jogador
     dados_novo_lista = df_geral[(df_geral['Nome'] == jogador_entrando) & (df_geral['Grupo'] == st.session_state['grupo_atual'])]
     if dados_novo_lista.empty:
         st.error(f"Erro: Jogador {jogador_entrando} não encontrado no grupo atual.")
         return
         
     dados_novo = dados_novo_lista.iloc[0]
-    
     idx_sair = time_df[time_df['Nome'] == jogador_saindo].index
     time_df = time_df.drop(idx_sair)
-    
     novo_df = pd.DataFrame([dados_novo])
     time_df = pd.concat([time_df, novo_df], ignore_index=True)
     
@@ -213,15 +225,11 @@ def calcular_novo_elo(rating_vencedor, rating_perdedor):
     return rating_vencedor + K_FACTOR * (1 - expectativa_vencedor)
 
 def distribuir_times_equilibrados(pool_nomes, levantadores_selecionados, tamanho_time, df_jogadores):
-    """Distribui jogadores em dois times equilibrados por Elo."""
     df_pool = df_jogadores[df_jogadores['Nome'].isin(pool_nomes)].copy()
-    
     levs = df_pool[df_pool['Nome'].isin(levantadores_selecionados)].sort_values(by='Elo', ascending=False).to_dict('records')
     outros = df_pool[~df_pool['Nome'].isin(levantadores_selecionados)].sort_values(by='Elo', ascending=False).to_dict('records')
     
-    time_a = []
-    time_b = []
-    
+    time_a, time_b = [], []
     def alocar(jogador):
         if len(time_a) < tamanho_time and len(time_b) < tamanho_time:
             elo_a = sum(p['Elo'] for p in time_a)
@@ -233,23 +241,19 @@ def distribuir_times_equilibrados(pool_nomes, levantadores_selecionados, tamanho
 
     for p in levs: alocar(p)
     for p in outros: alocar(p)
-    
     return pd.DataFrame(time_a), pd.DataFrame(time_b)
 
 def processar_vitoria(time_venc, time_perd, nome_venc_str, grupo_selecionado, t_a_nomes, t_b_nomes):
     mv, mp = time_venc['Elo'].mean(), time_perd['Elo'].mean()
     delta = calcular_novo_elo(mv, mp) - mv
-    
     df_ram = st.session_state['cache_jogadores']
     
-    # Atualiza Elo na memória
     for n in time_venc['Nome']:
         idx = df_ram.index[(df_ram['Nome'] == n) & (df_ram['Grupo'] == grupo_selecionado)]
         if not idx.empty:
             df_ram.loc[idx, 'Elo'] += delta
             df_ram.loc[idx, 'Partidas'] += 1
             df_ram.loc[idx, 'Vitorias'] += 1
-            
     for n in time_perd['Nome']:
         idx = df_ram.index[(df_ram['Nome'] == n) & (df_ram['Grupo'] == grupo_selecionado)]
         if not idx.empty:
@@ -259,11 +263,9 @@ def processar_vitoria(time_venc, time_perd, nome_venc_str, grupo_selecionado, t_
     conn.update(worksheet="Jogadores", data=df_ram)
     st.session_state['cache_jogadores'] = df_ram
     
-    # Salva Histórico
     try:
         fuso_br = pytz.timezone('America/Sao_Paulo')
         data_hora_atual = datetime.datetime.now(fuso_br).strftime("%d/%m %H:%M")
-        
         novo_registro = pd.DataFrame([{
             "Data": data_hora_atual,
             "Time A": ", ".join(t_a_nomes), 
@@ -272,34 +274,22 @@ def processar_vitoria(time_venc, time_perd, nome_venc_str, grupo_selecionado, t_
             "Pontos_Elo": f"+{delta:.1f}", 
             "Grupo": grupo_selecionado
         }])
-        
         df_h = conn.read(worksheet="Historico", ttl=0).dropna(how="all")
-        if df_h.empty:
-            conn.update(worksheet="Historico", data=novo_registro)
-        else:
-            conn.update(worksheet="Historico", data=pd.concat([df_h, novo_registro], ignore_index=True))
-    except Exception as e:
-        print(f"Erro ao salvar histórico: {e}")
+        if df_h.empty: conn.update(worksheet="Historico", data=novo_registro)
+        else: conn.update(worksheet="Historico", data=pd.concat([df_h, novo_registro], ignore_index=True))
+    except Exception as e: print(f"Erro ao salvar histórico: {e}")
     
-    # Lógica de Streak
     venc_nomes = time_venc['Nome'].tolist()
     anteriores = st.session_state.get('time_vencedor_anterior', [])
-    
-    if anteriores and set(venc_nomes) == set(anteriores):
-        st.session_state['streak_vitorias'] += 1
+    if anteriores and set(venc_nomes) == set(anteriores): st.session_state['streak_vitorias'] += 1
     else:
         st.session_state['streak_vitorias'] = 1
         st.session_state['time_vencedor_anterior'] = venc_nomes
     
-    # Perdedores vão para o final da fila
     perdedores = time_perd['Nome'].tolist()
     st.session_state['fila_espera'] = [p for p in st.session_state['fila_espera'] if p not in perdedores] + perdedores
-    
     st.toast(f"✅ Salvo! +{delta:.1f} pontos Elo!")
-    
-    if 'jogo_atual' in st.session_state:
-        del st.session_state['jogo_atual']
-    
+    if 'jogo_atual' in st.session_state: del st.session_state['jogo_atual']
     salvar_estado_disco()
     time.sleep(1)
     st.rerun()
@@ -358,19 +348,11 @@ with st.sidebar:
     def on_config_change():
         salvar_estado_disco()
 
-    # Garante que os valores no session_state sejam inteiros válidos
-    idx_tam = 2 # Padrão (index para valor 4)
-    if st.session_state['config_tamanho_time'] in [2,3,4,5,6]:
-        idx_tam = [2,3,4,5,6].index(st.session_state['config_tamanho_time'])
-
-    idx_vit = 1 # Padrão (index para valor 3)
-    if st.session_state['config_limite_vitorias'] in [2,3,4,5,6]:
-        idx_vit = [2,3,4,5,6].index(st.session_state['config_limite_vitorias'])
-
+    # REMOVIDO: parâmetro 'index' que causava o erro
+    # O Streamlit usará automaticamente o valor da 'key' do session_state
     t_time = st.radio(
         "Jogadores por time:", 
         [2, 3, 4, 5, 6], 
-        index=idx_tam, 
         horizontal=True,
         key='config_tamanho_time',
         on_change=on_config_change
@@ -379,7 +361,6 @@ with st.sidebar:
     l_vitorias = st.radio(
         "Limite de vitórias:", 
         [2, 3, 4, 5, 6], 
-        index=idx_vit, 
         horizontal=True,
         key='config_limite_vitorias',
         on_change=on_config_change
@@ -415,7 +396,6 @@ with tab2:
 
     if not df_jogadores.empty:
         df_visual = df_jogadores.copy()
-        
         if tipo_ranking == "Último dia":
             try:
                 df_h = conn.read(worksheet="Historico", ttl=0).dropna(how="all")
@@ -444,14 +424,13 @@ with tab2:
 
         if not df_visual.empty:
             patentes = [get_patente_info(e) for e in df_visual['Elo']]
-            # Evita duplicidade se a coluna já existir (em recarregamentos parciais)
             if 'Patente' in df_visual.columns: df_visual.drop(columns=['Patente'], inplace=True)
             if 'Pos.' in df_visual.columns: df_visual.drop(columns=['Pos.'], inplace=True)
             
             df_visual.insert(1, 'Patente', patentes)
             df_visual.insert(0, 'Pos.', [f"{i+1}º" for i in range(len(df_visual))])
 
-            exibir_tabela_plotly(df_visual[["Pos.", "Nome", "Patente", "Elo", "Partidas", "Vitorias"]], df_visual.columns)
+            exibir_tabela_plotly(df_visual[["Pos.", "Nome", "Patente", "Elo", "Partidas", "Vitorias"]], df_visual.columns, destacar_vencedor=False)
             st.caption("💡 Clique no ícone de câmera no canto superior direito da tabela para baixar como imagem.")
 
     with st.expander("➕ Cadastrar Novo Jogador"):
@@ -486,7 +465,8 @@ with tab3:
             
             df_hf = df_hf.iloc[::-1]
             cols_show = ["Data", "Time A", "Time B", "Vencedor", "Pontos_Elo"]
-            exibir_tabela_plotly(df_hf[cols_show], cols_show)
+            # AQUI: Ativamos o destaque do vencedor
+            exibir_tabela_plotly(df_hf[cols_show], cols_show, destacar_vencedor=True)
         else: st.info("Sem histórico.")
     except Exception as e: st.warning(f"Aguardando dados... {e}")
 
@@ -530,44 +510,27 @@ with tab1:
                     
                     streak = st.session_state.get('streak_vitorias', 0)
                     anteriores = st.session_state.get('time_vencedor_anterior', [])
-                    
-                    # Identifica quem do time vencedor anterior ainda está presente
                     vencedores_em_quadra = [p for p in anteriores if p in pres_final] if anteriores else []
                     
-                    # --- LÓGICA DE DISTRIBUIÇÃO COM REDISTRIBUIÇÃO DE VENCEDORES NO LIMITE ---
                     if streak >= limite_atual and vencedores_em_quadra:
                         st.toast("🏆 Limite atingido! Redistribuindo vencedores e fila.")
-                        
-                        # Prioridade 1: Vencedores (limite estourado)
                         pool_para_jogar = list(vencedores_em_quadra)
-                        
-                        # Prioridade 2: Fila de Espera (Topo da fila)
                         vagas_restantes = nec - len(pool_para_jogar)
                         fila_limpa = [p for p in st.session_state['fila_espera'] if p in pres_final and p not in pool_para_jogar]
-                        
                         if vagas_restantes > 0:
                             entram_da_fila = fila_limpa[:vagas_restantes]
                             pool_para_jogar.extend(entram_da_fila)
                             fila_limpa = fila_limpa[vagas_restantes:]
-                        
-                        # Atualiza Fila
                         st.session_state['fila_espera'] = fila_limpa
-                        
-                        # Reseta Streak e Redistribui
                         st.session_state['streak_vitorias'] = 0
                         st.session_state['time_vencedor_anterior'] = None
-                        
                         t_a, t_b = distribuir_times_equilibrados(pool_para_jogar, lev_final, tamanho_atual, df_jogadores)
                         st.session_state['jogo_atual'] = {'A': t_a, 'B': t_b}
                         salvar_estado_disco()
                         st.rerun()
-
                     else:
-                        # --- JOGO NORMAL (REI DA QUADRA) ---
                         time_a_nomes = []
-                        if vencedores_em_quadra:
-                            time_a_nomes = vencedores_em_quadra
-                        
+                        if vencedores_em_quadra: time_a_nomes = vencedores_em_quadra
                         candidatos = [p for p in pres_final if p not in time_a_nomes]
                         fila_real = [p for p in st.session_state['fila_espera'] if p in candidatos]
                         resto = [p for p in candidatos if p not in fila_real]
@@ -596,14 +559,12 @@ with tab1:
                         salvar_estado_disco()
                         st.rerun()
 
-            # --- MODO SUBSTITUIÇÃO ---
             with col_subs:
                 if st.toggle("Modo Substituição", value=st.session_state.get('modo_substituicao', False)):
                     st.session_state['modo_substituicao'] = True
                 else:
                     st.session_state['modo_substituicao'] = False
 
-            # --- EXIBIÇÃO DO JOGO ---
             if 'jogo_atual' in st.session_state:
                 t_a = st.session_state['jogo_atual']['A']
                 t_b = st.session_state['jogo_atual']['B']
@@ -636,11 +597,9 @@ with tab1:
                                 
                             icon = "🤲" if row['Nome'] in lev_final else "👤"
                             c_nome.write(f"**{icon} {row['Nome']}** ({row['Elo']:.0f})")
-                            
                             if c_btn:
                                 if c_btn.button("🔄", key=f"sub_{team_name}_{row['Nome']}", help="Substituir jogador"):
                                     realizar_substituicao(row['Nome'], team_name)
-                                
                         st.markdown("---")
                         if st.button(f"VITÓRIA TIME {team_name} 🏆", use_container_width=True, key=f"win_{team_name}"):
                             other = t_b if team_name == 'A' else t_a
@@ -650,13 +609,10 @@ with tab1:
                 with cM: st.markdown("<br><br><h2 style='text-align: center;'>VS</h2>", unsafe_allow_html=True)
                 render_team(t_b, 'B', cB)
 
-# --- ATUALIZAÇÃO FINAL DA FILA ---
 if 'fila_espera' in st.session_state and st.session_state['fila_espera']:
     fila_visivel = [p for p in st.session_state['fila_espera'] if p in st.session_state.get('todos_presentes', [])]
     if fila_visivel:
         txt = "\n".join([f"**{i+1}º** {n}" for i, n in enumerate(fila_visivel)])
         placeholder_fila.markdown(txt)
-    else:
-        placeholder_fila.caption("Fila vazia (todos presentes jogando).")
-else:
-    placeholder_fila.caption("Fila vazia.")
+    else: placeholder_fila.caption("Fila vazia (todos presentes jogando).")
+else: placeholder_fila.caption("Fila vazia.")
