@@ -247,7 +247,7 @@ def exibir_tabela_plotly(df, colunas_mostrar, destacar_vencedor=False):
         header=dict(
             values=list(colunas_mostrar),
             fill_color='#0e1117', # Cabeçalho Preto
-            font=dict(color='white', size=12, check_contrast=False), # Texto Branco forçado
+            font=dict(color='white', size=12), # CORRIGIDO: Removida a propriedade check_contrast
             align='left'
         ),
         cells=dict(
