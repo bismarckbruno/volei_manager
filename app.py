@@ -1,14 +1,21 @@
 import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 import pandas as pd
-import plotly.graph_objects as go
-from datetime import datetime
+import datetime
 import time
 import pytz
 import random
 import json
 import os
 import re
+
+# Tenta importar Plotly com tratamento de erro amigável
+try:
+    import plotly.graph_objects as go
+except ImportError:
+    st.error("❌ A biblioteca 'plotly' não foi encontrada.")
+    st.info("Certifique-se de que 'plotly' está listado no seu arquivo requirements.txt")
+    st.stop()
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(page_title="Vôlei Manager", page_icon="🏐", layout="wide")
@@ -18,6 +25,12 @@ st.title("🏐 Vôlei Manager")
 K_FACTOR = 32
 
 # --- CONEXÃO ---
+# Verifica se as secrets existem antes de tentar conectar
+if "gsheets" not in st.secrets.get("connections", {}):
+    st.warning("⚠️ Configuração de conexão não encontrada.")
+    st.info("Verifique se você configurou o `.streamlit/secrets.toml` (local) ou as Secrets no painel do Streamlit Cloud.")
+    # Não paramos o app aqui para permitir depuração, mas a conexão vai falhar abaixo
+
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 # --- GERENCIAMENTO DE ARQUIVOS DE ESTADO (PERSISTÊNCIA) ---
@@ -40,7 +53,6 @@ def salvar_estado_disco():
         'time_vencedor_anterior': st.session_state.get('time_vencedor_anterior', None),
         'todos_presentes': st.session_state.get('todos_presentes', []),
         'todos_levantadores': st.session_state.get('todos_levantadores', []),
-        # Novas configurações persistentes
         'config_tamanho_time': st.session_state.get('config_tamanho_time', 6),
         'config_limite_vitorias': st.session_state.get('config_limite_vitorias', 3),
         'jogo_atual_serializado': None
@@ -71,9 +83,9 @@ def carregar_estado_disco(grupo_alvo):
             st.session_state['todos_presentes'] = estado.get('todos_presentes', [])
             st.session_state['todos_levantadores'] = estado.get('todos_levantadores', [])
             
-            # Restaura configurações
-            st.session_state['config_tamanho_time'] = estado.get('config_tamanho_time', 6)
-            st.session_state['config_limite_vitorias'] = estado.get('config_limite_vitorias', 3)
+            # Restaura configurações convertendo para int para evitar erro de índice
+            st.session_state['config_tamanho_time'] = int(estado.get('config_tamanho_time', 6))
+            st.session_state['config_limite_vitorias'] = int(estado.get('config_limite_vitorias', 3))
             
             if estado.get('jogo_atual_serializado'):
                 st.session_state['jogo_atual'] = {
@@ -96,8 +108,8 @@ def inicializar_session_state():
         'todos_levantadores': [],
         'grupo_atual': None,
         'modo_substituicao': False,
-        'config_tamanho_time': 6,     # Valor padrão inicial
-        'config_limite_vitorias': 3   # Valor padrão inicial
+        'config_tamanho_time': 6,
+        'config_limite_vitorias': 3
     }
     for chave, valor in chaves_padrao.items():
         if chave not in st.session_state:
@@ -111,7 +123,6 @@ def carregar_dados():
         return st.session_state['cache_jogadores']
     
     try:
-        # TTL curto para evitar dados muito velhos, mas prevenindo chamadas excessivas
         df = conn.read(worksheet="Jogadores", ttl=60) 
         df = df.dropna(how="all")
         
@@ -123,8 +134,8 @@ def carregar_dados():
         st.session_state['cache_jogadores'] = df
         return df
     except Exception as e:
-        st.error("Erro de conexão com o Google Sheets.")
-        st.info("Tente clicar no botão 'Hard Reset' na barra lateral ou limpe os cookies do navegador.")
+        st.error("Erro ao conectar com Google Sheets.")
+        st.markdown(f"**Detalhe do erro:** `{e}`")
         st.stop()
 
 def exibir_tabela_plotly(df, colunas_mostrar):
@@ -137,7 +148,6 @@ def exibir_tabela_plotly(df, colunas_mostrar):
     
     for _, row in df.iterrows():
         if 'Patente' in row:
-            # Reutiliza lógica de cores da patente
             if "Iniciante" in row['Patente']: c, t = "#f1c40f", "black"
             elif "Amador" in row['Patente']: c, t = "#d4ac0d", "black"
             elif "Intermediário" in row['Patente']: c, t = "#1abc9c", "black"
@@ -179,7 +189,14 @@ def realizar_substituicao(jogador_saindo, time_alvo_str):
     
     time_df = st.session_state['jogo_atual'][time_alvo_str]
     df_geral = st.session_state['cache_jogadores']
-    dados_novo = df_geral[(df_geral['Nome'] == jogador_entrando) & (df_geral['Grupo'] == st.session_state['grupo_atual'])].iloc[0]
+    
+    # Busca dados do novo jogador
+    dados_novo_lista = df_geral[(df_geral['Nome'] == jogador_entrando) & (df_geral['Grupo'] == st.session_state['grupo_atual'])]
+    if dados_novo_lista.empty:
+        st.error(f"Erro: Jogador {jogador_entrando} não encontrado no grupo atual.")
+        return
+        
+    dados_novo = dados_novo_lista.iloc[0]
     
     idx_sair = time_df[time_df['Nome'] == jogador_saindo].index
     time_df = time_df.drop(idx_sair)
@@ -217,7 +234,6 @@ def distribuir_times_equilibrados(pool_nomes, levantadores_selecionados, tamanho
     for p in levs: alocar(p)
     for p in outros: alocar(p)
     
-    # Se sobrar alguém não alocado (caso ímpar ou erro), vai pro time com menos gente
     return pd.DataFrame(time_a), pd.DataFrame(time_b)
 
 def processar_vitoria(time_venc, time_perd, nome_venc_str, grupo_selecionado, t_a_nomes, t_b_nomes):
@@ -246,15 +262,14 @@ def processar_vitoria(time_venc, time_perd, nome_venc_str, grupo_selecionado, t_
     # Salva Histórico
     try:
         fuso_br = pytz.timezone('America/Sao_Paulo')
-        data_hora_atual = datetime.now(fuso_br).strftime("%d/%m %H:%M")
+        data_hora_atual = datetime.datetime.now(fuso_br).strftime("%d/%m %H:%M")
         
-        # Garante que a coluna Elo exista
         novo_registro = pd.DataFrame([{
             "Data": data_hora_atual,
             "Time A": ", ".join(t_a_nomes), 
             "Time B": ", ".join(t_b_nomes), 
             "Vencedor": nome_venc_str,
-            "Pontos_Elo": f"+{delta:.1f}", # Nova Coluna
+            "Pontos_Elo": f"+{delta:.1f}", 
             "Grupo": grupo_selecionado
         }])
         
@@ -266,20 +281,18 @@ def processar_vitoria(time_venc, time_perd, nome_venc_str, grupo_selecionado, t_
     except Exception as e:
         print(f"Erro ao salvar histórico: {e}")
     
-    # Lógica de Streak (Vitórias Consecutivas)
+    # Lógica de Streak
     venc_nomes = time_venc['Nome'].tolist()
     anteriores = st.session_state.get('time_vencedor_anterior', [])
     
-    # Verifica se é o mesmo time (sets iguais ignoram ordem)
     if anteriores and set(venc_nomes) == set(anteriores):
         st.session_state['streak_vitorias'] += 1
     else:
         st.session_state['streak_vitorias'] = 1
         st.session_state['time_vencedor_anterior'] = venc_nomes
     
-    # Quem perdeu vai para o FINAL da fila
+    # Perdedores vão para o final da fila
     perdedores = time_perd['Nome'].tolist()
-    # Adiciona perdedores ao final da fila, garantindo que não duplicam
     st.session_state['fila_espera'] = [p for p in st.session_state['fila_espera'] if p not in perdedores] + perdedores
     
     st.toast(f"✅ Salvo! +{delta:.1f} pontos Elo!")
@@ -297,7 +310,10 @@ df_geral = carregar_dados()
 # --- SIDEBAR: SELEÇÃO DE GRUPO ---
 with st.sidebar:
     st.header("👥 Grupos")
-    grupos_opcoes = df_geral['Grupo'].unique().tolist()
+    if df_geral is not None and not df_geral.empty:
+        grupos_opcoes = df_geral['Grupo'].unique().tolist()
+    else:
+        grupos_opcoes = []
     
     if st.session_state['grupo_atual'] and st.session_state['grupo_atual'] not in grupos_opcoes and st.session_state['grupo_atual'] != "➕ Criar novo...":
         grupos_opcoes.append(st.session_state['grupo_atual'])
@@ -330,20 +346,31 @@ with st.sidebar:
 
     st.divider()
 
-df_jogadores = df_geral[df_geral['Grupo'] == grupo_selecionado].copy()
+if df_geral is not None:
+    df_jogadores = df_geral[df_geral['Grupo'] == grupo_selecionado].copy()
+else:
+    df_jogadores = pd.DataFrame()
 
 # --- SIDEBAR: CONFIGURAÇÕES E FILA ---
 with st.sidebar:
     st.header("⚙️ Configurações")
     
-    # Callbacks para salvar configurações instantaneamente
     def on_config_change():
         salvar_estado_disco()
+
+    # Garante que os valores no session_state sejam inteiros válidos
+    idx_tam = 2 # Padrão (index para valor 4)
+    if st.session_state['config_tamanho_time'] in [2,3,4,5,6]:
+        idx_tam = [2,3,4,5,6].index(st.session_state['config_tamanho_time'])
+
+    idx_vit = 1 # Padrão (index para valor 3)
+    if st.session_state['config_limite_vitorias'] in [2,3,4,5,6]:
+        idx_vit = [2,3,4,5,6].index(st.session_state['config_limite_vitorias'])
 
     t_time = st.radio(
         "Jogadores por time:", 
         [2, 3, 4, 5, 6], 
-        index=[2, 3, 4, 5, 6].index(st.session_state['config_tamanho_time']), 
+        index=idx_tam, 
         horizontal=True,
         key='config_tamanho_time',
         on_change=on_config_change
@@ -352,7 +379,7 @@ with st.sidebar:
     l_vitorias = st.radio(
         "Limite de vitórias:", 
         [2, 3, 4, 5, 6], 
-        index=[2, 3, 4, 5, 6].index(st.session_state['config_limite_vitorias']), 
+        index=idx_vit, 
         horizontal=True,
         key='config_limite_vitorias',
         on_change=on_config_change
@@ -367,7 +394,7 @@ with st.sidebar:
     with col_btn1:
         if st.button("🔄 Atualizar"):
             carregar_estado_disco(grupo_selecionado)
-            st.cache_data.clear() # Limpa cache de dados
+            st.cache_data.clear()
             if 'cache_jogadores' in st.session_state: del st.session_state['cache_jogadores']
             st.rerun()
     with col_btn2:
@@ -399,7 +426,6 @@ with tab2:
                     jogos = df_h_grupo[df_h_grupo['Data'].str.contains(ultima_data, na=False)]
                     nomes = set()
                     for _, row in jogos.iterrows():
-                        # Tratamento robusto para nomes
                         ta = str(row.get('Time A', row.get('Time_A', '')))
                         tb = str(row.get('Time B', row.get('Time_B', '')))
                         nomes.update(ta.split(", "))
@@ -418,12 +444,14 @@ with tab2:
 
         if not df_visual.empty:
             patentes = [get_patente_info(e) for e in df_visual['Elo']]
+            # Evita duplicidade se a coluna já existir (em recarregamentos parciais)
+            if 'Patente' in df_visual.columns: df_visual.drop(columns=['Patente'], inplace=True)
+            if 'Pos.' in df_visual.columns: df_visual.drop(columns=['Pos.'], inplace=True)
+            
             df_visual.insert(1, 'Patente', patentes)
             df_visual.insert(0, 'Pos.', [f"{i+1}º" for i in range(len(df_visual))])
 
-            # Exibe Tabela Plotly (Com botão de download)
             exibir_tabela_plotly(df_visual[["Pos.", "Nome", "Patente", "Elo", "Partidas", "Vitorias"]], df_visual.columns)
-            
             st.caption("💡 Clique no ícone de câmera no canto superior direito da tabela para baixar como imagem.")
 
     with st.expander("➕ Cadastrar Novo Jogador"):
@@ -445,7 +473,6 @@ with tab3:
 
     try:
         df_hist = conn.read(worksheet="Historico", ttl=0).dropna(how="all")
-        # Garante colunas
         if "Pontos_Elo" not in df_hist.columns:
             df_hist["Pontos_Elo"] = ""
 
@@ -457,7 +484,6 @@ with tab3:
                 st.caption(f"📅 Exibindo partidas do dia: **{ultima_data_hist}**")
                 df_hf = df_hf[df_hf['Data'].str.contains(ultima_data_hist, na=False)]
             
-            # Ordena do mais recente para o mais antigo
             df_hf = df_hf.iloc[::-1]
             cols_show = ["Data", "Time A", "Time B", "Vencedor", "Pontos_Elo"]
             exibir_tabela_plotly(df_hf[cols_show], cols_show)
@@ -508,81 +534,61 @@ with tab1:
                     # Identifica quem do time vencedor anterior ainda está presente
                     vencedores_em_quadra = [p for p in anteriores if p in pres_final] if anteriores else []
                     
-                    # --- CENÁRIO 1: LIMITE ATINGIDO (REDISTRIBUIÇÃO) ---
+                    # --- LÓGICA DE DISTRIBUIÇÃO COM REDISTRIBUIÇÃO DE VENCEDORES NO LIMITE ---
                     if streak >= limite_atual and vencedores_em_quadra:
                         st.toast("🏆 Limite atingido! Redistribuindo vencedores e fila.")
                         
-                        # 1. Prioridade Máxima: Vencedores continuam jogando
+                        # Prioridade 1: Vencedores (limite estourado)
                         pool_para_jogar = list(vencedores_em_quadra)
                         
-                        # 2. Prioridade Secundária: Fila de Espera (Topo da fila)
-                        # Nota: Os perdedores da última rodada já estão no FINAL da fila
+                        # Prioridade 2: Fila de Espera (Topo da fila)
                         vagas_restantes = nec - len(pool_para_jogar)
-                        
-                        # Filtra a fila para garantir que só pega quem está presente e não é vencedor
                         fila_limpa = [p for p in st.session_state['fila_espera'] if p in pres_final and p not in pool_para_jogar]
                         
-                        # Completa o pool com o pessoal da fila
                         if vagas_restantes > 0:
                             entram_da_fila = fila_limpa[:vagas_restantes]
                             pool_para_jogar.extend(entram_da_fila)
-                            # Remove da fila quem entrou
                             fila_limpa = fila_limpa[vagas_restantes:]
                         
-                        # Atualiza a fila com quem sobrou
+                        # Atualiza Fila
                         st.session_state['fila_espera'] = fila_limpa
                         
-                        # 3. Reseta Streak e Redistribui (Mistura A e B equilibrando Elo)
+                        # Reseta Streak e Redistribui
                         st.session_state['streak_vitorias'] = 0
                         st.session_state['time_vencedor_anterior'] = None
                         
                         t_a, t_b = distribuir_times_equilibrados(pool_para_jogar, lev_final, tamanho_atual, df_jogadores)
-                        
                         st.session_state['jogo_atual'] = {'A': t_a, 'B': t_b}
                         salvar_estado_disco()
                         st.rerun()
 
-                    # --- CENÁRIO 2: JOGO NORMAL (REI DA QUADRA) ---
                     else:
+                        # --- JOGO NORMAL (REI DA QUADRA) ---
                         time_a_nomes = []
-                        time_b_nomes = []
-                        
-                        # 1. Mantém vencedores fixos no Time A (Se houver streak)
                         if vencedores_em_quadra:
                             time_a_nomes = vencedores_em_quadra
                         
-                        # 2. Define candidatos para as vagas restantes (Time B + Vagas no A se alguém saiu)
                         candidatos = [p for p in pres_final if p not in time_a_nomes]
                         fila_real = [p for p in st.session_state['fila_espera'] if p in candidatos]
-                        
-                        # Quem não está na fila (ex: chegou agora) entra depois misturado
                         resto = [p for p in candidatos if p not in fila_real]
                         random.shuffle(resto)
                         pool_ordenado = fila_real + resto
                         
-                        # 3. Preencher Time A (se alguém do time vencedor saiu)
                         vagas_a = tamanho_atual - len(time_a_nomes)
                         if vagas_a > 0:
-                            novos_a = pool_ordenado[:vagas_a]
-                            time_a_nomes.extend(novos_a)
+                            time_a_nomes.extend(pool_ordenado[:vagas_a])
                             pool_ordenado = pool_ordenado[vagas_a:]
                             
-                        # 4. Preencher Time B (Desafiantes da fila)
-                        vagas_b = tamanho_atual
-                        novos_b = pool_ordenado[:vagas_b]
+                        novos_b = pool_ordenado[:tamanho_atual]
                         time_b_nomes = novos_b
-                        pool_ordenado = pool_ordenado[vagas_b:]
+                        pool_ordenado = pool_ordenado[tamanho_atual:]
                         
-                        # 5. Atualiza fila
                         st.session_state['fila_espera'] = pool_ordenado
                         
-                        # 6. Cria DataFrames
-                        # Se manteve a estrutura de campeão, não rebalanceia o Time A
                         if vencedores_em_quadra and streak > 0:
                             t_a = df_jogadores[df_jogadores['Nome'].isin(time_a_nomes)]
                             t_b = df_jogadores[df_jogadores['Nome'].isin(time_b_nomes)]
                         else:
-                            # Se é o primeiro jogo ou o time campeão foi desfeito por falta de gente
                             todos = time_a_nomes + time_b_nomes
                             t_a, t_b = distribuir_times_equilibrados(todos, lev_final, tamanho_atual, df_jogadores)
                         
@@ -608,7 +614,6 @@ with tab1:
                 
                 def render_team(team_df, team_name, container):
                     with container:
-                        # Verifica se este time é o atual campeão
                         is_streak = streak > 0 and \
                                     st.session_state.get('time_vencedor_anterior') and \
                                     set(team_df['Nome']).issubset(set(st.session_state['time_vencedor_anterior']))
