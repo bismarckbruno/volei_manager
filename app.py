@@ -131,23 +131,22 @@ def carregar_dados():
         st.stop()
 
 def exibir_tabela_plotly(df, colunas_mostrar, destacar_vencedor=False):
-    """Gera uma tabela Plotly com formatação condicional."""
+    """Gera uma tabela Plotly com formatação condicional (Dark Mode)."""
     if df.empty: return
     
-    # Matrizes para armazenar cores de CADA célula (Coluna x Linha)
     fill_colors = []
     font_colors = []
     
-    # Itera sobre as colunas para construir a lista de cores coluna por coluna
     for col in colunas_mostrar:
         col_fill = []
         col_font = []
         
         for _, row in df.iterrows():
-            c = "white" # Cor padrão
-            t = "black" # Texto padrão
+            # COR PADRÃO (DARK MODE)
+            c = "#262730" # Cinza Escuro (Fundo)
+            t = "white"   # Texto Branco
             
-            # Lógica 1: Cores por Patente (Ranking)
+            # Lógica 1: Cores por Patente (Ranking) - Mantém texto preto para contraste nas cores vivas
             if 'Patente' in row:
                 if "Iniciante" in row['Patente']: c, t = "#f1c40f", "black"
                 elif "Amador" in row['Patente']: c, t = "#d4ac0d", "black"
@@ -155,17 +154,15 @@ def exibir_tabela_plotly(df, colunas_mostrar, destacar_vencedor=False):
                 elif "Avançado" in row['Patente']: c, t = "#3498db", "black"
                 elif "Lenda" in row['Patente']: c, t = "#2c3e50", "white"
             
-            # Lógica 2: Destaque de Vencedor (Histórico) - Sobrescreve Patente se necessário
+            # Lógica 2: Destaque de Vencedor (Histórico) - Sobrescreve
             if destacar_vencedor:
                 venc = str(row.get('Vencedor', ''))
-                # Se a coluna atual é Time A e o vencedor foi Time A
                 if col == "Time A" and ("Time A" in venc or "Time_A" in venc):
                     c = "#d1e7dd" # Verde Claro
-                    t = "black"
-                # Se a coluna atual é Time B e o vencedor foi Time B
+                    t = "black"   # Texto Preto para leitura
                 elif col == "Time B" and ("Time B" in venc or "Time_B" in venc):
-                    c = "#fff3cd" # Amarelo/Laranja Claro
-                    t = "black"
+                    c = "#fff3cd" # Amarelo Claro
+                    t = "black"   # Texto Preto para leitura
 
             col_fill.append(c)
             col_font.append(t)
@@ -176,7 +173,7 @@ def exibir_tabela_plotly(df, colunas_mostrar, destacar_vencedor=False):
     fig = go.Figure(data=[go.Table(
         header=dict(
             values=list(colunas_mostrar),
-            fill_color='#444',
+            fill_color='#0e1117', # Cabeçalho Preto
             font=dict(color='white', size=12),
             align='left'
         ),
@@ -189,7 +186,7 @@ def exibir_tabela_plotly(df, colunas_mostrar, destacar_vencedor=False):
         )
     )])
     
-    fig.update_layout(margin=dict(l=0, r=0, t=0, b=0), height=400)
+    fig.update_layout(margin=dict(l=0, r=0, t=0, b=0), height=400, paper_bgcolor="#0e1117")
     st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': True, 'displaylogo': False})
 
 
@@ -266,12 +263,16 @@ def processar_vitoria(time_venc, time_perd, nome_venc_str, grupo_selecionado, t_
     try:
         fuso_br = pytz.timezone('America/Sao_Paulo')
         data_hora_atual = datetime.datetime.now(fuso_br).strftime("%d/%m %H:%M")
+        
+        # CORREÇÃO DO SHEETS: Adiciona ' antes do + ou - para forçar texto
+        delta_str = f"'{delta:+.1f}"
+        
         novo_registro = pd.DataFrame([{
             "Data": data_hora_atual,
             "Time A": ", ".join(t_a_nomes), 
             "Time B": ", ".join(t_b_nomes), 
             "Vencedor": nome_venc_str,
-            "Pontos_Elo": f"+{delta:.1f}", 
+            "Pontos_Elo": delta_str, 
             "Grupo": grupo_selecionado
         }])
         df_h = conn.read(worksheet="Historico", ttl=0).dropna(how="all")
@@ -288,7 +289,7 @@ def processar_vitoria(time_venc, time_perd, nome_venc_str, grupo_selecionado, t_
     
     perdedores = time_perd['Nome'].tolist()
     st.session_state['fila_espera'] = [p for p in st.session_state['fila_espera'] if p not in perdedores] + perdedores
-    st.toast(f"✅ Salvo! +{delta:.1f} pontos Elo!")
+    st.toast(f"✅ Salvo! {delta:+.1f} pontos Elo!")
     if 'jogo_atual' in st.session_state: del st.session_state['jogo_atual']
     salvar_estado_disco()
     time.sleep(1)
@@ -412,6 +413,8 @@ with tab2:
             except: pass
 
         df_visual = df_visual.sort_values(by="Elo", ascending=False).reset_index(drop=True)
+        # ARREDONDAMENTO VISUAL PARA RANKING
+        df_visual['Elo'] = df_visual['Elo'].round().astype(int)
 
         def get_patente_info(elo):
             if elo < 1000: return "🐣 Iniciante"
@@ -428,7 +431,6 @@ with tab2:
             df_visual.insert(1, 'Patente', patentes)
             df_visual.insert(0, 'Pos.', [f"{i+1}º" for i in range(len(df_visual))])
 
-            # CORREÇÃO AQUI: Passamos a lista de colunas para filtrar E para exibir
             cols_ranking = ["Pos.", "Nome", "Patente", "Elo", "Partidas", "Vitorias"]
             exibir_tabela_plotly(df_visual[cols_ranking], cols_ranking, destacar_vencedor=False)
             
@@ -511,6 +513,11 @@ with tab1:
                     streak = st.session_state.get('streak_vitorias', 0)
                     anteriores = st.session_state.get('time_vencedor_anterior', [])
                     vencedores_em_quadra = [p for p in anteriores if p in pres_final] if anteriores else []
+                    
+                    # --- CORREÇÃO DO DESEQUILÍBRIO ---
+                    # Se reduziu o tamanho do time, corta o excesso de vencedores
+                    if len(vencedores_em_quadra) > tamanho_atual:
+                        vencedores_em_quadra = vencedores_em_quadra[:tamanho_atual]
                     
                     if streak >= limite_atual and vencedores_em_quadra:
                         st.toast("🏆 Limite atingido! Redistribuindo vencedores e fila.")
