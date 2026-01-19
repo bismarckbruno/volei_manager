@@ -42,7 +42,6 @@ def get_arquivo_estado(nome_grupo):
 def salvar_estado_disco():
     """Salva o estado atual do grupo que está na memória."""
     grupo = st.session_state.get('grupo_atual')
-    # Não salva se não tiver grupo definido
     if not grupo or grupo == "➕ Criar novo...": return
 
     arquivo = get_arquivo_estado(grupo)
@@ -98,7 +97,6 @@ def carregar_estado_disco(grupo_alvo):
             st.session_state['todos_presentes'] = estado.get('todos_presentes', [])
             st.session_state['todos_levantadores'] = estado.get('todos_levantadores', [])
             
-            # Carrega configurações específicas deste grupo
             st.session_state['config_tamanho_time'] = int(estado.get('config_tamanho_time', 6))
             st.session_state['config_limite_vitorias'] = int(estado.get('config_limite_vitorias', 3))
             
@@ -108,7 +106,6 @@ def carregar_estado_disco(grupo_alvo):
                     'B': pd.DataFrame(estado['jogo_atual_serializado']['B'])
                 }
             else:
-                # Se carregou o arquivo mas não tinha jogo, garante que limpa jogo anterior da memória
                 if 'jogo_atual' in st.session_state: del st.session_state['jogo_atual']
                 
             return True
@@ -126,7 +123,6 @@ def salvar_preferencia_usuario(nome_grupo):
     except: pass
 
 def obter_grupo_inicial(grupos_disponiveis):
-    # 1. Preferência local
     if os.path.exists(ARQUIVO_PREF_GLOBAL):
         try:
             with open(ARQUIVO_PREF_GLOBAL, 'r') as f:
@@ -135,7 +131,6 @@ def obter_grupo_inicial(grupos_disponiveis):
                 if ultimo in grupos_disponiveis: return ultimo
         except: pass
     
-    # 2. Histórico recente
     try:
         df_h = conn.read(worksheet="Historico", ttl=60)
         if not df_h.empty:
@@ -143,7 +138,6 @@ def obter_grupo_inicial(grupos_disponiveis):
             if ultimo_ativo in grupos_disponiveis: return ultimo_ativo
     except: pass
 
-    # 3. Padrão
     if grupos_disponiveis: return grupos_disponiveis[0]
     return None
 
@@ -350,7 +344,6 @@ with st.sidebar:
             
     opcoes_finais = grupos_opcoes + ["➕ Criar novo..."]
     
-    # --- LÓGICA DE SELEÇÃO INTELIGENTE ---
     idx = 0
     if st.session_state['grupo_atual']:
         if st.session_state['grupo_atual'] in opcoes_finais:
@@ -368,30 +361,20 @@ with st.sidebar:
             st.subheader("Novo Grupo")
             novo_nome = st.text_input("Nome")
             if st.form_submit_button("Criar") and novo_nome:
-                # Salva o anterior antes de criar o novo
                 if st.session_state['grupo_atual']: salvar_estado_disco()
-                
                 st.session_state['grupo_atual'] = novo_nome
-                limpar_estado_memoria() # Limpa memória pro novo grupo
-                salvar_estado_disco()   # Cria arquivo inicial
+                limpar_estado_memoria() 
+                salvar_estado_disco()   
                 salvar_preferencia_usuario(novo_nome)
                 st.rerun()
         st.stop()
     else:
-        # Se mudou de grupo
         if st.session_state['grupo_atual'] != grupo_selecionado:
-            # 1. SALVA O ESTADO DO GRUPO ANTERIOR (O "PULO DO GATO")
             if st.session_state['grupo_atual']: 
                 salvar_estado_disco()
-            
-            # 2. ATUALIZA PONTEIRO
             st.session_state['grupo_atual'] = grupo_selecionado
-            
-            # 3. CARREGA O NOVO (OU LIMPA SE FOR NOVO USO)
             if not carregar_estado_disco(grupo_selecionado):
                 limpar_estado_memoria()
-            
-            # 4. SALVA PREFERÊNCIA E RECARREGA
             salvar_preferencia_usuario(grupo_selecionado)
             st.rerun()
 
@@ -427,7 +410,7 @@ with st.sidebar:
     col_btn1, col_btn2 = st.columns(2)
     with col_btn1:
         if st.button("🔄 Atualizar"):
-            salvar_estado_disco() # Garante save antes do reload
+            salvar_estado_disco() 
             carregar_estado_disco(grupo_selecionado)
             st.cache_data.clear()
             if 'cache_jogadores' in st.session_state: del st.session_state['cache_jogadores']
@@ -551,10 +534,10 @@ with tab1:
         limite_atual = st.session_state['config_limite_vitorias']
         nec = tamanho_atual * 2
         
+        # --- BLOQUEIO DE JOGADORES INSUFICIENTES ---
         if len(pres_final) < nec:
-            st.warning(f"⚠️ Selecione pelo menos {nec} jogadores para iniciar uma partida equilibrada (Config atual: {tamanho_atual}x{tamanho_atual}).")
-        
-        if len(pres_final) >= 2: 
+            st.error(f"❌ Mínimo de {nec} jogadores necessários para partidas de {tamanho_atual}x{tamanho_atual}. Você selecionou apenas {len(pres_final)}. Selecione mais {nec - len(pres_final)}.")
+        else:
             st.divider()
             col_act, col_subs = st.columns([2, 1])
             
