@@ -416,7 +416,7 @@ with st.sidebar:
             if 'cache_jogadores' in st.session_state: del st.session_state['cache_jogadores']
             st.rerun()
     with col_btn2:
-        if st.button("⚠️ Hard Reset", help="Use se o app travar"):
+        if st.button("⚠️ Reset", help="Use se o app travar"):
             st.cache_data.clear()
             st.session_state.clear()
             if os.path.exists(ARQUIVO_PREF_GLOBAL): os.remove(ARQUIVO_PREF_GLOBAL)
@@ -670,3 +670,4 @@ if 'fila_espera' in st.session_state and st.session_state['fila_espera']:
         placeholder_fila.markdown(txt)
     else: placeholder_fila.caption("Fila vazia (todos presentes jogando).")
 else: placeholder_fila.caption("Fila vazia.")
+
