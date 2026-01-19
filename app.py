@@ -40,13 +40,13 @@ def get_arquivo_estado(nome_grupo):
     return f"state_{nome_seguro}.json"
 
 def salvar_estado_disco():
+    """Salva o estado atual do grupo que está na memória."""
     grupo = st.session_state.get('grupo_atual')
-    # Salva também a preferência global do usuário para o próximo reload
-    salvar_preferencia_usuario(grupo)
-    
-    arquivo = get_arquivo_estado(grupo)
-    if not arquivo: return
+    # Não salva se não tiver grupo definido
+    if not grupo or grupo == "➕ Criar novo...": return
 
+    arquivo = get_arquivo_estado(grupo)
+    
     estado = {
         'fila_espera': st.session_state.get('fila_espera', []),
         'streak_vitorias': st.session_state.get('streak_vitorias', 0),
@@ -70,49 +70,22 @@ def salvar_estado_disco():
     except Exception as e:
         print(f"Erro ao salvar cache local: {e}")
 
-# --- FUNÇÕES DE PREFERÊNCIA DO USUÁRIO ---
-def salvar_preferencia_usuario(nome_grupo):
-    """Salva qual foi o último grupo selecionado para sobreviver ao F5."""
-    if not nome_grupo or nome_grupo == "➕ Criar novo...": return
-    try:
-        with open(ARQUIVO_PREF_GLOBAL, 'w') as f:
-            json.dump({"ultimo_grupo": nome_grupo}, f)
-    except: pass
-
-def obter_grupo_inicial(grupos_disponiveis):
-    """
-    Define qual grupo deve vir selecionado por padrão.
-    Ordem de prioridade:
-    1. Último selecionado pelo usuário (salvo em JSON local).
-    2. Último grupo que teve jogo registrado no Histórico (Google Sheets).
-    3. Primeiro da lista alfabética.
-    """
-    # 1. Tenta carregar preferência local (Cache do navegador/sessão)
-    if os.path.exists(ARQUIVO_PREF_GLOBAL):
-        try:
-            with open(ARQUIVO_PREF_GLOBAL, 'r') as f:
-                dados = json.load(f)
-                ultimo = dados.get("ultimo_grupo")
-                if ultimo in grupos_disponiveis:
-                    return ultimo
-        except: pass
+def limpar_estado_memoria():
+    """Reseta a memória RAM para evitar vazamento de dados entre grupos."""
+    keys_to_reset = [
+        'fila_espera', 'streak_vitorias', 'time_vencedor_anterior', 
+        'todos_presentes', 'todos_levantadores', 'jogo_atual'
+    ]
+    for k in keys_to_reset:
+        if k in st.session_state:
+            del st.session_state[k]
     
-    # 2. Se não tiver preferência, busca o mais recente no Histórico (Smart Default)
-    try:
-        df_h = conn.read(worksheet="Historico", ttl=60) # TTL curto para garantir frescor
-        if not df_h.empty:
-            # Assume que a última linha é a mais recente (append do Google Sheets)
-            ultimo_ativo = df_h.iloc[-1]['Grupo']
-            if ultimo_ativo in grupos_disponiveis:
-                return ultimo_ativo
-    except: pass
-
-    # 3. Fallback padrão
-    if grupos_disponiveis:
-        return grupos_disponiveis[0]
-    return None
+    # Restaura configurações padrão
+    st.session_state['config_tamanho_time'] = 6
+    st.session_state['config_limite_vitorias'] = 3
 
 def carregar_estado_disco(grupo_alvo):
+    """Tenta carregar o JSON do grupo alvo. Se falhar, retorna False."""
     arquivo = get_arquivo_estado(grupo_alvo)
     if arquivo and os.path.exists(arquivo):
         try:
@@ -125,6 +98,7 @@ def carregar_estado_disco(grupo_alvo):
             st.session_state['todos_presentes'] = estado.get('todos_presentes', [])
             st.session_state['todos_levantadores'] = estado.get('todos_levantadores', [])
             
+            # Carrega configurações específicas deste grupo
             st.session_state['config_tamanho_time'] = int(estado.get('config_tamanho_time', 6))
             st.session_state['config_limite_vitorias'] = int(estado.get('config_limite_vitorias', 3))
             
@@ -133,11 +107,45 @@ def carregar_estado_disco(grupo_alvo):
                     'A': pd.DataFrame(estado['jogo_atual_serializado']['A']),
                     'B': pd.DataFrame(estado['jogo_atual_serializado']['B'])
                 }
+            else:
+                # Se carregou o arquivo mas não tinha jogo, garante que limpa jogo anterior da memória
+                if 'jogo_atual' in st.session_state: del st.session_state['jogo_atual']
+                
             return True
         except Exception as e:
             st.warning(f"Não foi possível restaurar sessão anterior: {e}")
             return False
     return False
+
+# --- FUNÇÕES DE PREFERÊNCIA DO USUÁRIO ---
+def salvar_preferencia_usuario(nome_grupo):
+    if not nome_grupo or nome_grupo == "➕ Criar novo...": return
+    try:
+        with open(ARQUIVO_PREF_GLOBAL, 'w') as f:
+            json.dump({"ultimo_grupo": nome_grupo}, f)
+    except: pass
+
+def obter_grupo_inicial(grupos_disponiveis):
+    # 1. Preferência local
+    if os.path.exists(ARQUIVO_PREF_GLOBAL):
+        try:
+            with open(ARQUIVO_PREF_GLOBAL, 'r') as f:
+                dados = json.load(f)
+                ultimo = dados.get("ultimo_grupo")
+                if ultimo in grupos_disponiveis: return ultimo
+        except: pass
+    
+    # 2. Histórico recente
+    try:
+        df_h = conn.read(worksheet="Historico", ttl=60)
+        if not df_h.empty:
+            ultimo_ativo = df_h.iloc[-1]['Grupo']
+            if ultimo_ativo in grupos_disponiveis: return ultimo_ativo
+    except: pass
+
+    # 3. Padrão
+    if grupos_disponiveis: return grupos_disponiveis[0]
+    return None
 
 # --- INICIALIZAÇÃO DE ESTADO ---
 def inicializar_session_state():
@@ -176,7 +184,6 @@ def carregar_dados():
         st.stop()
 
 def exibir_tabela_plotly(df, colunas_mostrar, destacar_vencedor=False):
-    """Gera uma tabela Plotly com formatação condicional (Dark Mode)."""
     if df.empty: return
     
     fill_colors = []
@@ -185,11 +192,9 @@ def exibir_tabela_plotly(df, colunas_mostrar, destacar_vencedor=False):
     for col in colunas_mostrar:
         col_fill = []
         col_font = []
-        
         for _, row in df.iterrows():
             c = "#262730" 
             t = "white"   
-            
             if 'Patente' in row:
                 if "Iniciante" in row['Patente']: c, t = "#f1c40f", "black"
                 elif "Amador" in row['Patente']: c, t = "#d4ac0d", "black"
@@ -200,34 +205,19 @@ def exibir_tabela_plotly(df, colunas_mostrar, destacar_vencedor=False):
             if destacar_vencedor:
                 venc = str(row.get('Vencedor', ''))
                 if col == "Time A" and ("Time A" in venc or "Time_A" in venc):
-                    c = "#d1e7dd"
-                    t = "black"
+                    c = "#d1e7dd"; t = "black"
                 elif col == "Time B" and ("Time B" in venc or "Time_B" in venc):
-                    c = "#fff3cd"
-                    t = "black"
+                    c = "#fff3cd"; t = "black"
 
             col_fill.append(c)
             col_font.append(t)
-        
         fill_colors.append(col_fill)
         font_colors.append(col_font)
 
     fig = go.Figure(data=[go.Table(
-        header=dict(
-            values=list(colunas_mostrar),
-            fill_color='#0e1117',
-            font=dict(color='white', size=12),
-            align='left'
-        ),
-        cells=dict(
-            values=[df[k].tolist() for k in colunas_mostrar],
-            fill_color=fill_colors,
-            font=dict(color=font_colors, size=11),
-            align='left',
-            height=30
-        )
+        header=dict(values=list(colunas_mostrar), fill_color='#0e1117', font=dict(color='white', size=12), align='left'),
+        cells=dict(values=[df[k].tolist() for k in colunas_mostrar], fill_color=fill_colors, font=dict(color=font_colors, size=11), align='left', height=30)
     )])
-    
     fig.update_layout(margin=dict(l=0, r=0, t=0, b=0), height=400, paper_bgcolor="#0e1117")
     st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': True, 'displaylogo': False})
 
@@ -360,14 +350,12 @@ with st.sidebar:
             
     opcoes_finais = grupos_opcoes + ["➕ Criar novo..."]
     
-    # --- LÓGICA DE SELEÇÃO INTELIGENTE (SMART DEFAULT) ---
+    # --- LÓGICA DE SELEÇÃO INTELIGENTE ---
     idx = 0
     if st.session_state['grupo_atual']:
-        # Se já tem algo na memória (durante a navegação), usa ele
         if st.session_state['grupo_atual'] in opcoes_finais:
             idx = opcoes_finais.index(st.session_state['grupo_atual'])
     else:
-        # Se está vazio (início ou F5), tenta descobrir qual deve ser
         grupo_inicial = obter_grupo_inicial(grupos_opcoes)
         if grupo_inicial and grupo_inicial in opcoes_finais:
             idx = opcoes_finais.index(grupo_inicial)
@@ -380,20 +368,30 @@ with st.sidebar:
             st.subheader("Novo Grupo")
             novo_nome = st.text_input("Nome")
             if st.form_submit_button("Criar") and novo_nome:
+                # Salva o anterior antes de criar o novo
+                if st.session_state['grupo_atual']: salvar_estado_disco()
+                
                 st.session_state['grupo_atual'] = novo_nome
-                for k in ['jogo_atual', 'fila_espera', 'streak_vitorias', 'time_vencedor_anterior']:
-                    if k in st.session_state: del st.session_state[k]
-                salvar_estado_disco()
+                limpar_estado_memoria() # Limpa memória pro novo grupo
+                salvar_estado_disco()   # Cria arquivo inicial
+                salvar_preferencia_usuario(novo_nome)
                 st.rerun()
         st.stop()
     else:
-        # Se mudou de grupo (via selectbox) ou é o carregamento inicial
+        # Se mudou de grupo
         if st.session_state['grupo_atual'] != grupo_selecionado:
+            # 1. SALVA O ESTADO DO GRUPO ANTERIOR (O "PULO DO GATO")
+            if st.session_state['grupo_atual']: 
+                salvar_estado_disco()
+            
+            # 2. ATUALIZA PONTEIRO
             st.session_state['grupo_atual'] = grupo_selecionado
+            
+            # 3. CARREGA O NOVO (OU LIMPA SE FOR NOVO USO)
             if not carregar_estado_disco(grupo_selecionado):
-                for k in ['jogo_atual', 'fila_espera', 'streak_vitorias', 'time_vencedor_anterior']:
-                    if k in st.session_state: del st.session_state[k]
-            # Salva a nova preferência imediatamente
+                limpar_estado_memoria()
+            
+            # 4. SALVA PREFERÊNCIA E RECARREGA
             salvar_preferencia_usuario(grupo_selecionado)
             st.rerun()
 
@@ -412,19 +410,13 @@ with st.sidebar:
         salvar_estado_disco()
 
     t_time = st.radio(
-        "Jogadores por time:", 
-        [2, 3, 4, 5, 6], 
-        horizontal=True,
-        key='config_tamanho_time',
-        on_change=on_config_change
+        "Jogadores por time:", [2, 3, 4, 5, 6], horizontal=True,
+        key='config_tamanho_time', on_change=on_config_change
     )
     
     l_vitorias = st.radio(
-        "Limite de vitórias:", 
-        [2, 3, 4, 5, 6], 
-        horizontal=True,
-        key='config_limite_vitorias',
-        on_change=on_config_change
+        "Limite de vitórias:", [2, 3, 4, 5, 6], horizontal=True,
+        key='config_limite_vitorias', on_change=on_config_change
     )
     
     st.divider()
@@ -435,15 +427,15 @@ with st.sidebar:
     col_btn1, col_btn2 = st.columns(2)
     with col_btn1:
         if st.button("🔄 Atualizar"):
+            salvar_estado_disco() # Garante save antes do reload
             carregar_estado_disco(grupo_selecionado)
             st.cache_data.clear()
             if 'cache_jogadores' in st.session_state: del st.session_state['cache_jogadores']
             st.rerun()
     with col_btn2:
-        if st.button("⚠️ Hard Reset", help="Use se o app travar ou ficar carregando infinitamente"):
+        if st.button("⚠️ Hard Reset", help="Use se o app travar"):
             st.cache_data.clear()
             st.session_state.clear()
-            # Limpa também a preferência global para resetar totalmente
             if os.path.exists(ARQUIVO_PREF_GLOBAL): os.remove(ARQUIVO_PREF_GLOBAL)
             st.rerun()
 
@@ -585,7 +577,6 @@ with tab1:
                         random.shuffle(vencedores_em_quadra)
                         forca_a = []
                         forca_b = []
-                        
                         for i, p in enumerate(vencedores_em_quadra):
                             if i % 2 == 0: forca_a.append(p)
                             else: forca_b.append(p)
