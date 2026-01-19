@@ -182,7 +182,7 @@ def exibir_tabela_plotly(df, colunas_mostrar, destacar_vencedor=False):
         ),
         cells=dict(
             values=[df[k].tolist() for k in colunas_mostrar],
-            fill_color=fill_colors, # Matriz de cores corrigida
+            fill_color=fill_colors,
             font=dict(color=font_colors, size=11),
             align='left',
             height=30
@@ -348,8 +348,6 @@ with st.sidebar:
     def on_config_change():
         salvar_estado_disco()
 
-    # REMOVIDO: parâmetro 'index' que causava o erro
-    # O Streamlit usará automaticamente o valor da 'key' do session_state
     t_time = st.radio(
         "Jogadores por time:", 
         [2, 3, 4, 5, 6], 
@@ -430,7 +428,10 @@ with tab2:
             df_visual.insert(1, 'Patente', patentes)
             df_visual.insert(0, 'Pos.', [f"{i+1}º" for i in range(len(df_visual))])
 
-            exibir_tabela_plotly(df_visual[["Pos.", "Nome", "Patente", "Elo", "Partidas", "Vitorias"]], df_visual.columns, destacar_vencedor=False)
+            # CORREÇÃO AQUI: Passamos a lista de colunas para filtrar E para exibir
+            cols_ranking = ["Pos.", "Nome", "Patente", "Elo", "Partidas", "Vitorias"]
+            exibir_tabela_plotly(df_visual[cols_ranking], cols_ranking, destacar_vencedor=False)
+            
             st.caption("💡 Clique no ícone de câmera no canto superior direito da tabela para baixar como imagem.")
 
     with st.expander("➕ Cadastrar Novo Jogador"):
@@ -465,7 +466,6 @@ with tab3:
             
             df_hf = df_hf.iloc[::-1]
             cols_show = ["Data", "Time A", "Time B", "Vencedor", "Pontos_Elo"]
-            # AQUI: Ativamos o destaque do vencedor
             exibir_tabela_plotly(df_hf[cols_show], cols_show, destacar_vencedor=True)
         else: st.info("Sem histórico.")
     except Exception as e: st.warning(f"Aguardando dados... {e}")
