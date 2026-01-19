@@ -79,7 +79,6 @@ def carregar_estado_disco(grupo_alvo):
             st.session_state['todos_presentes'] = estado.get('todos_presentes', [])
             st.session_state['todos_levantadores'] = estado.get('todos_levantadores', [])
             
-            # Converte para int para garantir compatibilidade
             st.session_state['config_tamanho_time'] = int(estado.get('config_tamanho_time', 6))
             st.session_state['config_limite_vitorias'] = int(estado.get('config_limite_vitorias', 3))
             
@@ -142,11 +141,9 @@ def exibir_tabela_plotly(df, colunas_mostrar, destacar_vencedor=False):
         col_font = []
         
         for _, row in df.iterrows():
-            # COR PADRÃO (DARK MODE)
-            c = "#262730" # Cinza Escuro (Fundo)
-            t = "white"   # Texto Branco
+            c = "#262730" 
+            t = "white"   
             
-            # Lógica 1: Cores por Patente (Ranking) - Mantém texto preto para contraste nas cores vivas
             if 'Patente' in row:
                 if "Iniciante" in row['Patente']: c, t = "#f1c40f", "black"
                 elif "Amador" in row['Patente']: c, t = "#d4ac0d", "black"
@@ -154,15 +151,14 @@ def exibir_tabela_plotly(df, colunas_mostrar, destacar_vencedor=False):
                 elif "Avançado" in row['Patente']: c, t = "#3498db", "black"
                 elif "Lenda" in row['Patente']: c, t = "#2c3e50", "white"
             
-            # Lógica 2: Destaque de Vencedor (Histórico) - Sobrescreve
             if destacar_vencedor:
                 venc = str(row.get('Vencedor', ''))
                 if col == "Time A" and ("Time A" in venc or "Time_A" in venc):
-                    c = "#d1e7dd" # Verde Claro
-                    t = "black"   # Texto Preto para leitura
+                    c = "#d1e7dd"
+                    t = "black"
                 elif col == "Time B" and ("Time B" in venc or "Time_B" in venc):
-                    c = "#fff3cd" # Amarelo Claro
-                    t = "black"   # Texto Preto para leitura
+                    c = "#fff3cd"
+                    t = "black"
 
             col_fill.append(c)
             col_font.append(t)
@@ -173,7 +169,7 @@ def exibir_tabela_plotly(df, colunas_mostrar, destacar_vencedor=False):
     fig = go.Figure(data=[go.Table(
         header=dict(
             values=list(colunas_mostrar),
-            fill_color='#0e1117', # Cabeçalho Preto
+            fill_color='#0e1117',
             font=dict(color='white', size=12),
             align='left'
         ),
@@ -221,12 +217,25 @@ def calcular_novo_elo(rating_vencedor, rating_perdedor):
     expectativa_vencedor = 1 / (1 + 10 ** ((rating_perdedor - rating_vencedor) / 400))
     return rating_vencedor + K_FACTOR * (1 - expectativa_vencedor)
 
-def distribuir_times_equilibrados(pool_nomes, levantadores_selecionados, tamanho_time, df_jogadores):
+# Função atualizada para aceitar listas pré-definidas (forçar separação)
+def distribuir_times_equilibrados(pool_nomes, levantadores_selecionados, tamanho_time, df_jogadores, pre_time_a=None, pre_time_b=None):
     df_pool = df_jogadores[df_jogadores['Nome'].isin(pool_nomes)].copy()
     levs = df_pool[df_pool['Nome'].isin(levantadores_selecionados)].sort_values(by='Elo', ascending=False).to_dict('records')
     outros = df_pool[~df_pool['Nome'].isin(levantadores_selecionados)].sort_values(by='Elo', ascending=False).to_dict('records')
     
-    time_a, time_b = [], []
+    # Inicializa com jogadores já forçados (caso existam)
+    time_a = pre_time_a if pre_time_a else []
+    time_b = pre_time_b if pre_time_b else []
+    
+    # Busca dados completos dos jogadores forçados para cálculo de Elo
+    if pre_time_a:
+        df_pre_a = df_jogadores[df_jogadores['Nome'].isin(pre_time_a)].to_dict('records')
+        # Substitui strings simples pelos objetos completos
+        time_a = df_pre_a
+    if pre_time_b:
+        df_pre_b = df_jogadores[df_jogadores['Nome'].isin(pre_time_b)].to_dict('records')
+        time_b = df_pre_b
+
     def alocar(jogador):
         if len(time_a) < tamanho_time and len(time_b) < tamanho_time:
             elo_a = sum(p['Elo'] for p in time_a)
@@ -263,8 +272,6 @@ def processar_vitoria(time_venc, time_perd, nome_venc_str, grupo_selecionado, t_
     try:
         fuso_br = pytz.timezone('America/Sao_Paulo')
         data_hora_atual = datetime.datetime.now(fuso_br).strftime("%d/%m %H:%M")
-        
-        # CORREÇÃO DO SHEETS: Adiciona ' antes do + ou - para forçar texto
         delta_str = f"'{delta:+.1f}"
         
         novo_registro = pd.DataFrame([{
@@ -413,7 +420,6 @@ with tab2:
             except: pass
 
         df_visual = df_visual.sort_values(by="Elo", ascending=False).reset_index(drop=True)
-        # ARREDONDAMENTO VISUAL PARA RANKING
         df_visual['Elo'] = df_visual['Elo'].round().astype(int)
 
         def get_patente_info(elo):
@@ -433,7 +439,6 @@ with tab2:
 
             cols_ranking = ["Pos.", "Nome", "Patente", "Elo", "Partidas", "Vitorias"]
             exibir_tabela_plotly(df_visual[cols_ranking], cols_ranking, destacar_vencedor=False)
-            
             st.caption("💡 Clique no ícone de câmera no canto superior direito da tabela para baixar como imagem.")
 
     with st.expander("➕ Cadastrar Novo Jogador"):
@@ -514,27 +519,43 @@ with tab1:
                     anteriores = st.session_state.get('time_vencedor_anterior', [])
                     vencedores_em_quadra = [p for p in anteriores if p in pres_final] if anteriores else []
                     
-                    # --- CORREÇÃO DO DESEQUILÍBRIO ---
-                    # Se reduziu o tamanho do time, corta o excesso de vencedores
                     if len(vencedores_em_quadra) > tamanho_atual:
                         vencedores_em_quadra = vencedores_em_quadra[:tamanho_atual]
                     
                     if streak >= limite_atual and vencedores_em_quadra:
                         st.toast("🏆 Limite atingido! Redistribuindo vencedores e fila.")
-                        pool_para_jogar = list(vencedores_em_quadra)
-                        vagas_restantes = nec - len(pool_para_jogar)
-                        fila_limpa = [p for p in st.session_state['fila_espera'] if p in pres_final and p not in pool_para_jogar]
+                        
+                        # --- DIVISÃO FORÇADA ---
+                        # Aqui garantimos que os vencedores não ficam juntos.
+                        # Embaralhamos e distribuímos alternadamente para A e B
+                        random.shuffle(vencedores_em_quadra)
+                        forca_a = []
+                        forca_b = []
+                        
+                        for i, p in enumerate(vencedores_em_quadra):
+                            if i % 2 == 0: forca_a.append(p)
+                            else: forca_b.append(p)
+                        
+                        # Agora pegamos a fila para completar
+                        vagas_restantes = nec - len(vencedores_em_quadra)
+                        fila_limpa = [p for p in st.session_state['fila_espera'] if p in pres_final and p not in vencedores_em_quadra]
+                        
+                        pool_para_equilibrar = []
                         if vagas_restantes > 0:
                             entram_da_fila = fila_limpa[:vagas_restantes]
-                            pool_para_jogar.extend(entram_da_fila)
+                            pool_para_equilibrar = entram_da_fila
                             fila_limpa = fila_limpa[vagas_restantes:]
+                        
                         st.session_state['fila_espera'] = fila_limpa
                         st.session_state['streak_vitorias'] = 0
                         st.session_state['time_vencedor_anterior'] = None
-                        t_a, t_b = distribuir_times_equilibrados(pool_para_jogar, lev_final, tamanho_atual, df_jogadores)
+                        
+                        # Chama a função de distribuição passando os times "pré-forçados"
+                        t_a, t_b = distribuir_times_equilibrados(pool_para_equilibrar, lev_final, tamanho_atual, df_jogadores, pre_time_a=forca_a, pre_time_b=forca_b)
                         st.session_state['jogo_atual'] = {'A': t_a, 'B': t_b}
                         salvar_estado_disco()
                         st.rerun()
+
                     else:
                         time_a_nomes = []
                         if vencedores_em_quadra: time_a_nomes = vencedores_em_quadra
