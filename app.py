@@ -177,7 +177,7 @@ def carregar_dados():
         st.error(f"Erro ao ler a aba 'Jogadores': {e}")
         st.stop()
 
-def exibir_tabela_plotly(df, colunas_mostrar, destacar_vencedor=False):
+def exibir_tabela_plotly(df, colunas_mostrar, destacar_vencedor=False, tamanhos_colunas=None):
     if df.empty: return
     
     fill_colors = []
@@ -208,10 +208,17 @@ def exibir_tabela_plotly(df, colunas_mostrar, destacar_vencedor=False):
         fill_colors.append(col_fill)
         font_colors.append(col_font)
 
-    fig = go.Figure(data=[go.Table(
+    # Configuração da Tabela com larguras personalizadas
+    tabela_args = dict(
         header=dict(values=list(colunas_mostrar), fill_color='#0e1117', font=dict(color='white', size=12), align='left'),
         cells=dict(values=[df[k].tolist() for k in colunas_mostrar], fill_color=fill_colors, font=dict(color=font_colors, size=11), align='left', height=30)
-    )])
+    )
+    
+    # Se foram passados tamanhos, adiciona ao objeto
+    if tamanhos_colunas:
+        tabela_args['columnwidth'] = tamanhos_colunas
+
+    fig = go.Figure(data=[go.Table(**tabela_args)])
     fig.update_layout(margin=dict(l=0, r=0, t=0, b=0), height=400, paper_bgcolor="#0e1117")
     st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': True, 'displaylogo': False})
 
@@ -416,7 +423,7 @@ with st.sidebar:
             if 'cache_jogadores' in st.session_state: del st.session_state['cache_jogadores']
             st.rerun()
     with col_btn2:
-        if st.button("⚠️ Reset", help="Use se o app travar"):
+        if st.button("⚠️ Hard Reset", help="Use se o app travar"):
             st.cache_data.clear()
             st.session_state.clear()
             if os.path.exists(ARQUIVO_PREF_GLOBAL): os.remove(ARQUIVO_PREF_GLOBAL)
@@ -470,7 +477,9 @@ with tab2:
             df_visual.insert(0, 'Pos.', [f"{i+1}º" for i in range(len(df_visual))])
 
             cols_ranking = ["Pos.", "Nome", "Patente", "Elo", "Partidas", "Vitorias"]
-            exibir_tabela_plotly(df_visual[cols_ranking], cols_ranking, destacar_vencedor=False)
+            # AQUI: PESOS DO RANKING
+            # Pos (estreito), Nome (largo), Patente (médio), Resto (estreito)
+            exibir_tabela_plotly(df_visual[cols_ranking], cols_ranking, destacar_vencedor=False, tamanhos_colunas=[1, 4, 3, 1.2, 1, 1])
             st.caption("💡 Clique no ícone de câmera no canto superior direito da tabela para baixar como imagem.")
 
     with st.expander("➕ Cadastrar Novo Jogador"):
@@ -505,7 +514,9 @@ with tab3:
             
             df_hf = df_hf.iloc[::-1]
             cols_show = ["Data", "Time A", "Time B", "Vencedor", "Pontos_Elo"]
-            exibir_tabela_plotly(df_hf[cols_show], cols_show, destacar_vencedor=True)
+            # AQUI: PESOS DO HISTÓRICO
+            # Data (pequeno), Times (largo), Vencedor (médio), Pontos (pequeno)
+            exibir_tabela_plotly(df_hf[cols_show], cols_show, destacar_vencedor=True, tamanhos_colunas=[1.2, 4, 4, 3, 1.2])
         else: st.info("Sem histórico.")
     except Exception as e: st.warning(f"Aguardando dados... {e}")
 
@@ -670,4 +681,3 @@ if 'fila_espera' in st.session_state and st.session_state['fila_espera']:
         placeholder_fila.markdown(txt)
     else: placeholder_fila.caption("Fila vazia (todos presentes jogando).")
 else: placeholder_fila.caption("Fila vazia.")
-
