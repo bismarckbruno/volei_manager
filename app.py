@@ -23,6 +23,7 @@ st.title("🏐 Vôlei Manager")
 
 # --- CONSTANTES ---
 K_FACTOR = 32
+ARQUIVO_PREF_GLOBAL = "user_pref.json" # Arquivo para salvar o último grupo selecionado
 
 # --- CONEXÃO DEFENSIVA ---
 try:
@@ -40,6 +41,9 @@ def get_arquivo_estado(nome_grupo):
 
 def salvar_estado_disco():
     grupo = st.session_state.get('grupo_atual')
+    # Salva também a preferência global do usuário para o próximo reload
+    salvar_preferencia_usuario(grupo)
+    
     arquivo = get_arquivo_estado(grupo)
     if not arquivo: return
 
@@ -65,6 +69,48 @@ def salvar_estado_disco():
             json.dump(estado, f)
     except Exception as e:
         print(f"Erro ao salvar cache local: {e}")
+
+# --- FUNÇÕES DE PREFERÊNCIA DO USUÁRIO ---
+def salvar_preferencia_usuario(nome_grupo):
+    """Salva qual foi o último grupo selecionado para sobreviver ao F5."""
+    if not nome_grupo or nome_grupo == "➕ Criar novo...": return
+    try:
+        with open(ARQUIVO_PREF_GLOBAL, 'w') as f:
+            json.dump({"ultimo_grupo": nome_grupo}, f)
+    except: pass
+
+def obter_grupo_inicial(grupos_disponiveis):
+    """
+    Define qual grupo deve vir selecionado por padrão.
+    Ordem de prioridade:
+    1. Último selecionado pelo usuário (salvo em JSON local).
+    2. Último grupo que teve jogo registrado no Histórico (Google Sheets).
+    3. Primeiro da lista alfabética.
+    """
+    # 1. Tenta carregar preferência local (Cache do navegador/sessão)
+    if os.path.exists(ARQUIVO_PREF_GLOBAL):
+        try:
+            with open(ARQUIVO_PREF_GLOBAL, 'r') as f:
+                dados = json.load(f)
+                ultimo = dados.get("ultimo_grupo")
+                if ultimo in grupos_disponiveis:
+                    return ultimo
+        except: pass
+    
+    # 2. Se não tiver preferência, busca o mais recente no Histórico (Smart Default)
+    try:
+        df_h = conn.read(worksheet="Historico", ttl=60) # TTL curto para garantir frescor
+        if not df_h.empty:
+            # Assume que a última linha é a mais recente (append do Google Sheets)
+            ultimo_ativo = df_h.iloc[-1]['Grupo']
+            if ultimo_ativo in grupos_disponiveis:
+                return ultimo_ativo
+    except: pass
+
+    # 3. Fallback padrão
+    if grupos_disponiveis:
+        return grupos_disponiveis[0]
+    return None
 
 def carregar_estado_disco(grupo_alvo):
     arquivo = get_arquivo_estado(grupo_alvo)
@@ -217,20 +263,16 @@ def calcular_novo_elo(rating_vencedor, rating_perdedor):
     expectativa_vencedor = 1 / (1 + 10 ** ((rating_perdedor - rating_vencedor) / 400))
     return rating_vencedor + K_FACTOR * (1 - expectativa_vencedor)
 
-# Função atualizada para aceitar listas pré-definidas (forçar separação)
 def distribuir_times_equilibrados(pool_nomes, levantadores_selecionados, tamanho_time, df_jogadores, pre_time_a=None, pre_time_b=None):
     df_pool = df_jogadores[df_jogadores['Nome'].isin(pool_nomes)].copy()
     levs = df_pool[df_pool['Nome'].isin(levantadores_selecionados)].sort_values(by='Elo', ascending=False).to_dict('records')
     outros = df_pool[~df_pool['Nome'].isin(levantadores_selecionados)].sort_values(by='Elo', ascending=False).to_dict('records')
     
-    # Inicializa com jogadores já forçados (caso existam)
     time_a = pre_time_a if pre_time_a else []
     time_b = pre_time_b if pre_time_b else []
     
-    # Busca dados completos dos jogadores forçados para cálculo de Elo
     if pre_time_a:
         df_pre_a = df_jogadores[df_jogadores['Nome'].isin(pre_time_a)].to_dict('records')
-        # Substitui strings simples pelos objetos completos
         time_a = df_pre_a
     if pre_time_b:
         df_pre_b = df_jogadores[df_jogadores['Nome'].isin(pre_time_b)].to_dict('records')
@@ -317,9 +359,19 @@ with st.sidebar:
         grupos_opcoes.append(st.session_state['grupo_atual'])
             
     opcoes_finais = grupos_opcoes + ["➕ Criar novo..."]
+    
+    # --- LÓGICA DE SELEÇÃO INTELIGENTE (SMART DEFAULT) ---
     idx = 0
-    if st.session_state['grupo_atual'] in opcoes_finais:
-        idx = opcoes_finais.index(st.session_state['grupo_atual'])
+    if st.session_state['grupo_atual']:
+        # Se já tem algo na memória (durante a navegação), usa ele
+        if st.session_state['grupo_atual'] in opcoes_finais:
+            idx = opcoes_finais.index(st.session_state['grupo_atual'])
+    else:
+        # Se está vazio (início ou F5), tenta descobrir qual deve ser
+        grupo_inicial = obter_grupo_inicial(grupos_opcoes)
+        if grupo_inicial and grupo_inicial in opcoes_finais:
+            idx = opcoes_finais.index(grupo_inicial)
+            st.session_state['grupo_atual'] = grupo_inicial
         
     grupo_selecionado = st.selectbox("Selecionar grupo:", opcoes_finais, index=idx)
     
@@ -335,11 +387,14 @@ with st.sidebar:
                 st.rerun()
         st.stop()
     else:
+        # Se mudou de grupo (via selectbox) ou é o carregamento inicial
         if st.session_state['grupo_atual'] != grupo_selecionado:
             st.session_state['grupo_atual'] = grupo_selecionado
             if not carregar_estado_disco(grupo_selecionado):
                 for k in ['jogo_atual', 'fila_espera', 'streak_vitorias', 'time_vencedor_anterior']:
                     if k in st.session_state: del st.session_state[k]
+            # Salva a nova preferência imediatamente
+            salvar_preferencia_usuario(grupo_selecionado)
             st.rerun()
 
     st.divider()
@@ -388,6 +443,8 @@ with st.sidebar:
         if st.button("⚠️ Hard Reset", help="Use se o app travar ou ficar carregando infinitamente"):
             st.cache_data.clear()
             st.session_state.clear()
+            # Limpa também a preferência global para resetar totalmente
+            if os.path.exists(ARQUIVO_PREF_GLOBAL): os.remove(ARQUIVO_PREF_GLOBAL)
             st.rerun()
 
 # --- ABAS ---
@@ -525,9 +582,6 @@ with tab1:
                     if streak >= limite_atual and vencedores_em_quadra:
                         st.toast("🏆 Limite atingido! Redistribuindo vencedores e fila.")
                         
-                        # --- DIVISÃO FORÇADA ---
-                        # Aqui garantimos que os vencedores não ficam juntos.
-                        # Embaralhamos e distribuímos alternadamente para A e B
                         random.shuffle(vencedores_em_quadra)
                         forca_a = []
                         forca_b = []
@@ -536,7 +590,6 @@ with tab1:
                             if i % 2 == 0: forca_a.append(p)
                             else: forca_b.append(p)
                         
-                        # Agora pegamos a fila para completar
                         vagas_restantes = nec - len(vencedores_em_quadra)
                         fila_limpa = [p for p in st.session_state['fila_espera'] if p in pres_final and p not in vencedores_em_quadra]
                         
@@ -550,7 +603,6 @@ with tab1:
                         st.session_state['streak_vitorias'] = 0
                         st.session_state['time_vencedor_anterior'] = None
                         
-                        # Chama a função de distribuição passando os times "pré-forçados"
                         t_a, t_b = distribuir_times_equilibrados(pool_para_equilibrar, lev_final, tamanho_atual, df_jogadores, pre_time_a=forca_a, pre_time_b=forca_b)
                         st.session_state['jogo_atual'] = {'A': t_a, 'B': t_b}
                         salvar_estado_disco()
